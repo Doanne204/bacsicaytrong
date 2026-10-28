@@ -1,0 +1,22 @@
+PlantVillage/
+# bộ dữ liệu (10+ GB, tải lại theo README) và Node.js bản portable: không đưa lên GitHub
+dataset/
+tools/
+.venv/
+.venv-yolo/
+yolo/insect204/
+yolo/runs/
+.env
+instance/
+dataset_ai/
+certs/
+results/
+__pycache__/
+*.pyc
+# mô hình: chỉ giữ bản app đang dùng (plant_model.keras, pest_model.keras kèm tên lớp, tâm lớp); bỏ bản trùng và bản ứng viên
+models/best_plant_model.keras
+models/candidate/
+models/candidate_pest/
+frontend/node_modules/
+frontend/dist/
+backups/

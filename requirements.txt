@@ -1,0 +1,9 @@
+flask>=3.0
+python-dotenv
+cryptography
+psycopg2-binary>=2.9.10
+pillow
+numpy
+tensorflow>=2.15
+scikit-learn
+waitress>=3.0
