@@ -76,8 +76,9 @@
     Từ chối kèm lý do. Người báo nhận thông báo kết quả.
   - Huấn luyện lại chỉ với ảnh đã duyệt: `flask --app app export-dataset dataset_ai_duyet` (chép ảnh đã duyệt theo lớp, xuất lại từ đầu
     mỗi lần) rồi `python train.py --data ... --extra dataset_ai_duyet`.
-- **Thư viện sâu bệnh** (`/library`): xem không cần chụp ảnh các bệnh lá (lớp của mô hình + bệnh AI đã học) và 204 loài sâu hại /
-  thiên địch, tìm không dấu, lọc theo cây hoặc nhóm sâu; ảnh minh họa lấy ảnh đầu tiên của lớp trong `dataset/` (hoặc mẫu AI), thu nhỏ
+- **Thư viện sâu bệnh** (`/library`): xem không cần chụp ảnh đủ 38 lớp bệnh lá của mô hình (kể cả lá khỏe) và 204 loài sâu hại /
+  thiên địch; bệnh AI học thêm chỉ hiện khi đã có ảnh được quản trị viên duyệt (ảnh người dùng gửi thử chưa duyệt không hiện ra).
+  Tìm không dấu, lọc theo cây hoặc nhóm sâu; ảnh minh họa lấy ảnh đầu tiên của lớp trong `dataset/` (hoặc mẫu AI đã duyệt), thu nhỏ
   lưu ở `instance/library/` (`LEAF_DATASET_DIR`, `PEST_DATASET_DIR` nếu dataset để chỗ khác). Bấm một bệnh: cách xử lý, nút hỏi trợ lý AI
   (câu hỏi soạn sẵn qua `/chat?q=`).
 - **Cài lên điện thoại (PWA) và thông báo đẩy**: service worker `frontend/public/sw.js` (Flask phục vụ ở `/sw.js`): có mạng thì luôn lấy

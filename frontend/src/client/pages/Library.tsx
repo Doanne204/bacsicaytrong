@@ -31,7 +31,7 @@ export default function Library() {
     return items.filter((i) => words.every((w) => fold(`${i.title} ${i.sub} ${i.hosts || ""}`).includes(w)));
   }, [items, q]);
   const chips = !lib.data ? [] : tab === "leaf"
-    ? lib.data.plants.filter((p) => lib.data!.diseases.some((d) => d.plant_id === p.id)).map((p) => [p.id, p.name])
+    ? lib.data.plants.map((p) => [p.id, p.name])
     : [["_good", "Thiên địch có ích"], ...lib.data.groups.filter((g) => g.id !== "thien_dich").map((g) => [g.id, g.name])];
   const switchTab = (t: string) => { setTab(t); setFilter(""); setLimit(PAGE); };
   return (
@@ -72,7 +72,8 @@ export default function Library() {
   );
 }
 
-const leafItem = (d: LibDisease): Item => ({ key: d.class_name, title: d.disease, sub: d.plant, remedy: d.remedy, pest: false, tag: d.source === "ai" ? "AI học thêm" : undefined });
+const leafItem = (d: LibDisease): Item => ({ key: d.class_name, title: d.healthy ? "Lá khỏe mạnh" : d.disease, sub: d.plant, remedy: d.remedy, pest: false,
+  good: d.healthy, tag: d.healthy ? "Lá khỏe" : d.source === "ai" ? "AI học thêm" : undefined });
 const pestItem = (p: LibPest): Item => ({ key: p.class_name, title: p.name, sub: p.group_name, remedy: p.remedy, hosts: p.hosts, pest: true, good: p.beneficial, tag: p.beneficial ? "Có ích" : undefined });
 
 function Thumb({ item, className }: { item: Item; className?: string }) {

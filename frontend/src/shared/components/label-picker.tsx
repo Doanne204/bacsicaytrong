@@ -16,10 +16,9 @@ export interface LabelOption { class_name: string; title: string; sub: string; p
 /** Danh sách nhãn chọn được: bệnh lá (kèm "lá khỏe" của từng cây) và/hoặc sâu hại. */
 export function labelOptions(lib: Library | undefined, kind: "leaf" | "pest" | "all"): LabelOption[] {
   if (!lib) return [];
-  const leaf: LabelOption[] = kind === "pest" ? [] : [
-    ...lib.diseases.map((d) => ({ class_name: d.class_name, title: d.disease, sub: d.plant, pest: false })),
-    ...lib.plants.filter((p) => p.healthy_class).map((p) => ({ class_name: p.healthy_class!, title: "Lá khỏe mạnh", sub: p.name, pest: false })),
-  ].sort((a, b) => a.sub.localeCompare(b.sub, "vi") || a.title.localeCompare(b.title, "vi"));
+  const leaf: LabelOption[] = kind === "pest" ? [] : lib.diseases
+    .map((d) => ({ class_name: d.class_name, title: d.healthy ? "Lá khỏe mạnh" : d.disease, sub: d.plant, pest: false }))
+    .sort((a, b) => a.sub.localeCompare(b.sub, "vi") || a.title.localeCompare(b.title, "vi"));
   const pest: LabelOption[] = kind === "leaf" ? [] : lib.pests.map((p) => ({ class_name: p.class_name, title: p.name, sub: `${p.group_name} · ${p.class_name}`, pest: true }));
   return [...leaf, ...pest];
 }

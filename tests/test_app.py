@@ -1368,12 +1368,20 @@ class LibraryTests(Base):
         self.authed()
         j = self.c.get("/api/library").get_json()
         self.assertTrue(any(d["class_name"] == "Tomato___Late_blight" and d["disease"] == "Bệnh mốc sương (sương mai)" for d in j["diseases"]))
-        self.assertFalse(any("healthy" in d["class_name"] for d in j["diseases"]))  # lá khỏe không phải bệnh
-        tomato = next(p for p in j["plants"] if p["id"] == "tomato")
-        self.assertEqual(tomato["healthy_class"], "Tomato___healthy")
+        self.assertEqual(len(j["diseases"]), 38)  # đủ các lớp bệnh lá của mô hình, kể cả lá khỏe (như sâu hại có cả thiên địch)
+        self.assertTrue(next(d for d in j["diseases"] if d["class_name"] == "Tomato___healthy")["healthy"])
+        self.assertIn({"id": "tomato", "name": "Cà chua"}, j["plants"])
         self.assertEqual(len(j["pests"]), len(pests.PESTS))
         self.assertTrue(any(p["beneficial"] for p in j["pests"]))
         self.assertEqual(self.get_status("/api/library/image?c=Kh%C3%B4ng___c%C3%B3"), 404)
+        with mock.patch.multiple(ai_service, vision_available=mock.Mock(return_value=True), analyze_image=mock.Mock(return_value=ai_answer())):
+            self.predict("other")  # ảnh thử: AI học lớp Xoài, mẫu chờ duyệt
+        names = lambda: [d["class_name"] for d in self.c.get("/api/library").get_json()["diseases"]]
+        self.assertNotIn("Mango___Anthracnose", names())  # chưa duyệt: không hiện, ảnh của người dùng cũng không lộ ra
+        self.assertEqual(self.get_status("/api/library/image?c=Mango___Anthracnose"), 404)
+        self.run_sql("UPDATE ai_samples SET status='approved'")
+        self.assertIn("Mango___Anthracnose", names())
+        self.assertEqual(self.get_status("/api/library/image?c=Mango___Anthracnose"), 200)
         self.c.post("/api/logout"); self.assertEqual(self.c.get("/api/library").status_code, 401)
 
 class PushTests(Base):

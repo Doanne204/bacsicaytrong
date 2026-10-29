@@ -111,7 +111,7 @@ export interface WrongReport {
   id: number; class_name: string | null; plant: string | null; disease: string; note: string | null;
   status: "open" | "accepted" | "rejected"; answer: string | null; created: string; reviewed: string | null;
 }
-export interface LibDisease { class_name: string; plant_id: string; plant: string; disease: string; remedy: string; source: "model" | "ai" }
+export interface LibDisease { class_name: string; plant_id: string; plant: string; disease: string; healthy: boolean; remedy: string; source: "model" | "ai" }
 export interface LibPest { class_name: string; name: string; group: string; group_name: string; hosts: string; beneficial: boolean; remedy: string }
-export interface Library { plants: { id: string; name: string; healthy_class: string | null }[]; diseases: LibDisease[]; pests: LibPest[]; groups: { id: string; name: string }[] }
+export interface Library { plants: { id: string; name: string }[]; diseases: LibDisease[]; pests: LibPest[]; groups: { id: string; name: string }[] }
 export const libImage = (c: string) => `/api/library/image?c=${encodeURIComponent(c)}`;

@@ -1614,44 +1614,43 @@ PEST_DATASET = os.getenv("PEST_DATASET_DIR", os.path.join(PROJECT_DIR, "dataset"
 @bp.get("/api/library")
 @login_required
 def library():
-    """Bệnh lá (lớp của mô hình + bệnh AI đã học, bỏ lớp "khỏe mạnh") và 204 loài sâu hại / thiên địch, kèm hướng xử lý.
-    plants[].healthy_class: lớp lá khỏe của từng cây (để người dùng chọn khi báo kết quả sai)."""
-    leaf, healthy = [], {}
+    """Bệnh lá: mọi lớp của bộ dữ liệu bệnh lá mô hình đã học (kể cả lá khỏe, như tab sâu hại có cả thiên địch), cộng bệnh AI học thêm
+    đã có ảnh được quản trị viên duyệt (lớp AI chỉ có ảnh người dùng gửi thử, chưa duyệt thì không hiện). Sâu hại: 204 loài INSECT204."""
+    approved = {r[0] for r in db().execute("SELECT DISTINCT class_name FROM ai_samples WHERE status='approved'")}
+    leaf = []
     for c in known_classes():
-        if vague_class(c["class_name"]):
+        cls, mc = c["class_name"], model_class(c["class_name"])
+        if vague_class(cls) or not (mc or cls in approved):
             continue
-        i = class_info(c["class_name"])
-        if i["healthy"]:
-            healthy.setdefault(i["plant_id"], c["class_name"])
-            continue
-        leaf.append(dict(class_name=c["class_name"], plant_id=i["plant_id"], plant=i["plant"], disease=i["disease"], remedy=i["remedy"],
-                         source="model" if model_class(c["class_name"]) else "ai"))
-    names = {c["plant_id"]: c["plant"] for c in leaf}
-    names.update({k: knowledge.PLANTS[k] for k in healthy if k in knowledge.PLANTS and k not in names})
+        i = class_info(cls)
+        leaf.append(dict(class_name=cls, plant_id=i["plant_id"], plant=i["plant"], disease=i["disease"], healthy=i["healthy"], remedy=i["remedy"],
+                         source="model" if mc else "ai"))
+    plants = sorted({(d["plant_id"], d["plant"]) for d in leaf}, key=lambda p: p[1])
     pest = [dict(class_name=raw, name=e["disease"], group=pests.PESTS[raw]["group"], group_name=e["group_name"], hosts=e["hosts"],
                  beneficial=e["beneficial"], remedy=e["remedy"]) for raw in sorted(pests.PESTS) for e in [pest_entry(raw, 0)]]
     groups = [dict(id=k, name=v[0]) for k, v in pests.GROUPS.items() if any(p["group"] == k for p in pest)]
-    plants = [dict(id=k, name=v, healthy_class=healthy.get(k)) for k, v in sorted(names.items(), key=lambda x: x[1])]
-    return jsonify(plants=plants, diseases=leaf, pests=pest, groups=groups)
+    return jsonify(plants=[dict(id=k, name=v) for k, v in plants], diseases=leaf, pests=pest, groups=groups)
 
 @bp.get("/api/library/image")
 @login_required
 def library_image():
-    """Ảnh minh họa một lớp (?c=<tên lớp>): ảnh đầu tiên trong dataset (bệnh lá / INSECT204) hoặc mẫu AI (ưu tiên mẫu đã duyệt),
-    thu nhỏ một lần rồi lưu ở instance/library/. Không có ảnh -> 404 (giao diện hiện biểu tượng)."""
+    """Ảnh minh họa một lớp (?c=<tên lớp>): ảnh đầu tiên trong dataset (bệnh lá / INSECT204) hoặc mẫu AI đã được duyệt (không lấy ảnh
+    người dùng gửi chưa duyệt), thu nhỏ một lần rồi lưu ở instance/library/. Không có ảnh -> 404 (giao diện hiện biểu tượng)."""
     cls = request.args.get("c") or ""
     if not label_info(cls):
         abort(404)
     out_dir = os.path.join(current_app.instance_path, "library")
-    name = hashlib.sha1(cls.encode()).hexdigest()[:20] + ".jpg"
+    folder = os.path.join(PEST_DATASET if cls in pests.PESTS else LEAF_DATASET, cls)
+    if os.path.isdir(folder):
+        key, src = cls, lambda: next((os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.lower().endswith((".jpg", ".jpeg", ".png"))), None)
+    else:  # lớp AI học thêm: ảnh đệm đặt tên theo mẫu đang dùng, mẫu bị xóa / đổi nhãn thì không còn hiện
+        s = db().execute("SELECT path FROM ai_samples WHERE class_name=? AND status='approved' ORDER BY id DESC LIMIT 1", (cls,)).fetchone()
+        if not s:
+            abort(404)
+        key, src = f"{cls}|{s['path']}", lambda: os.path.join(current_app.config["AI_DATASET_DIR"], s["path"])
+    name = hashlib.sha1(key.encode()).hexdigest()[:20] + ".jpg"
     if not os.path.exists(os.path.join(out_dir, name)):
-        src, folder = None, os.path.join(PEST_DATASET if cls in pests.PESTS else LEAF_DATASET, cls)
-        if os.path.isdir(folder):
-            src = next((os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.lower().endswith((".jpg", ".jpeg", ".png"))), None)
-        if not src:
-            s = db().execute("SELECT path FROM ai_samples WHERE class_name=? ORDER BY CASE WHEN status='approved' THEN 0 ELSE 1 END, id DESC "
-                             "LIMIT 1", (cls,)).fetchone()
-            src = s and os.path.join(current_app.config["AI_DATASET_DIR"], s["path"])
+        src = src()
         if not src or not os.path.exists(src):
             abort(404)
         from PIL import Image
