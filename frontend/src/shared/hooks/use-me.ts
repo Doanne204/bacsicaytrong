@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, send, type Me } from "@/shared/lib/api";
+import { disablePush } from "@/shared/lib/pwa";
 
 /** Người dùng đang đăng nhập (null nếu chưa). Dùng chung cho client và admin. */
 export function useMe() {
@@ -17,6 +18,7 @@ export function useMe() {
 export function useLogout() {
   const qc = useQueryClient();
   return async () => {
+    await disablePush().catch(() => {});  // thiết bị này thôi nhận thông báo của tài khoản vừa đăng xuất
     await send("/api/logout", {});
     qc.setQueryData(["me"], null);
     qc.clear();

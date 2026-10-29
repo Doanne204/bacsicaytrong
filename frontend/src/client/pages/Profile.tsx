@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Bell, CloudSun, LogOut, PenSquare, Shield, ChevronRight, Star } from "lucide-react";
+import { Bell, BookOpen, CloudSun, LogOut, PenSquare, Shield, ChevronRight, Star } from "lucide-react";
 import { send, ApiError } from "@/shared/lib/api";
 import { fmtDate, MSG, normPhone, RE, toDate } from "@/shared/lib/utils";
 import { useLogout, useMe } from "@/shared/hooks/use-me";
@@ -12,6 +12,7 @@ import { Avatar, Field } from "@/shared/ui/misc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { ThemeToggle } from "@/shared/components/common";
 import { LocationPicker } from "../components/weather";
+import { AppCard } from "../components/push";
 
 export default function Profile() {
   const { me } = useMe();
@@ -44,7 +45,7 @@ export default function Profile() {
   };
   const menu = (
     <nav className="divide-y rounded-2xl border bg-card">
-      {[["/notifications", Bell, `Thông báo${me.unread ? ` (${me.unread} chưa đọc)` : ""}`], ["/home/mine", PenSquare, "Bài viết của tôi"], ["/ratings", Star, "Đánh giá của tôi"], ["/weather", CloudSun, "Cảnh báo thời tiết"], ...(me.role === "admin" ? [["/admin", Shield, "Trang quản trị"]] : [])].map(([to, Icon, l]) => {
+      {[["/notifications", Bell, `Thông báo${me.unread ? ` (${me.unread} chưa đọc)` : ""}`], ["/home/mine", PenSquare, "Bài viết của tôi"], ["/ratings", Star, "Đánh giá của tôi"], ["/weather", CloudSun, "Cảnh báo thời tiết"], ["/library", BookOpen, "Thư viện sâu bệnh"], ...(me.role === "admin" ? [["/admin", Shield, "Trang quản trị"]] : [])].map(([to, Icon, l]) => {
         const I = Icon as React.ComponentType<{ className?: string }>, href = to as string;
         const inner = <><I className="h-5 w-5 text-primary" /><span className="flex-1">{l as string}</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></>;
         const cls = "flex items-center gap-3 px-4 py-3.5 text-sm font-semibold transition hover:bg-accent";
@@ -62,6 +63,7 @@ export default function Profile() {
           {[["/history", me.stats.scans, "Lần tra cứu"], ["/journal", me.stats.treatments, "Đang điều trị"], ["/home/mine", me.stats.posts, "Bài đã đăng"]].map(([to, n, l]) => <Link key={to as string} to={to as string} className="py-3.5 hover:bg-accent"><b className="block text-2xl">{n as number}</b><span className="text-xs text-muted-foreground">{l as string}</span></Link>)}
         </nav>
         <div className="hidden lg:block">{menu}</div>
+        <AppCard />
       </aside>
       <section className="space-y-5">
         <Card>

@@ -76,7 +76,7 @@ export function LocationPicker({ value, onChange, compact }: { value: Location |
 // ---------- Bản đồ ca bệnh (Leaflet + OpenStreetMap, nạp từ CDN khi mở trang) ----------
 const LEAFLET = "https://unpkg.com/leaflet@1.9.4/dist/";
 let leafletLoading: Promise<void> | null = null;
-function loadLeaflet() {
+export function loadLeaflet() {
   if ((window as unknown as { L?: unknown }).L) return Promise.resolve();
   if (!leafletLoading) {
     leafletLoading = new Promise((resolve, reject) => {

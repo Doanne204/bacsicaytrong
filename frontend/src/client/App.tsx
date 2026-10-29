@@ -25,6 +25,8 @@ const PrintSheet = lazy(() => import("./pages/PrintSheet"));
 const Journal = lazy(() => import("./pages/Journal"));
 const JournalDetail = lazy(() => import("./pages/JournalDetail"));
 const Weather = lazy(() => import("./pages/Weather"));
+const MapPage = lazy(() => import("./pages/MapPage"));
+const Library = lazy(() => import("./pages/Library"));
 
 export default function App() {
   const { me, loading } = useMe();
@@ -49,6 +51,7 @@ export default function App() {
           <Route path="/scan/camera" element={<Scan camera />} />
           <Route path="/diagnosis/:id" element={<Diagnosis />} />
           <Route path="/history" element={<History />} />
+          <Route path="/library" element={<Library />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:id" element={<Chat />} />
           <Route path="/ratings" element={<Ratings />} />
@@ -62,6 +65,7 @@ export default function App() {
           <Route path="/journal" element={<Journal />} />
           <Route path="/journal/:id" element={<JournalDetail />} />
           <Route path="/weather" element={<Weather />} />
+          <Route path="/map" element={<MapPage />} />
         </Route>
         <Route path="*" element={<Navigate to={me ? "/home" : "/"} replace />} />
       </Routes>

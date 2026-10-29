@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { TooltipProvider } from "@/shared/ui/misc";
 import App from "./App";
+import { registerSW } from "@/shared/lib/pwa";
 import "@/shared/styles/globals.css";
 
 // Sau khi build lại, tab đang mở vẫn trỏ tới các file trang cũ (tên có mã băm) đã bị xóa -> tải trang mới hỏng.
@@ -18,6 +19,8 @@ window.addEventListener("vite:preloadError", (e) => {
   e.preventDefault();
   window.location.reload();
 });
+
+registerSW();
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 

@@ -1,13 +1,13 @@
 """Giao diện người dùng: trang chính (/) và API cho người dùng: tài khoản, tra cứu bệnh (mô hình + AI), lịch sử, chat AI,
 đánh giá, bài đăng cộng đồng có AI kiểm duyệt, thông báo. Giao diện React ở frontend/src/client, build ra frontend/dist (index.html)."""
-import json, os, re, unicodedata, uuid
+import hashlib, json, os, re, secrets, unicodedata, uuid
 from datetime import datetime, timedelta, timezone
 import numpy as np
-from flask import Blueprint, abort, current_app, jsonify, request, session
+from flask import Blueprint, abort, current_app, jsonify, request, send_from_directory, session
 from werkzeug.security import generate_password_hash, check_password_hash
-import knowledge, ai_service, care, weather
-from model_service import lesion_overlay, severity, severity_level
-from core import (TOO_MANY, IntegrityError, check_code, check_login, client_ip, db, deliver_code, deliver_reminders, drop_samples, err,
+import knowledge, ai_service, care, google_login, pests, push, shopping, weather
+from model_service import lesion_overlay, pest_entry, severity, severity_level
+from core import (LOCKED, TOO_MANY, IntegrityError, check_code, check_login, client_ip, db, deliver_code, deliver_reminders, drop_samples, err,
                   image_url, is_admin, issue_code, login_required, me_row, norm_phone, notify, post_out, post_rows, rate_limit, remove_upload,
                   save_image, spa_page, user_plants, utcnow)
 
@@ -164,6 +164,62 @@ def login():
     session.clear(); session["uid"] = r["id"]
     return jsonify(ok=True, username=r["username"])
 
+@bp.get("/api/auth/config")
+def auth_config():
+    """Cấu hình đăng nhập cho giao diện: mã ứng dụng Google (không bí mật) nếu đã bật đăng nhập bằng Google."""
+    return jsonify(google_client_id=google_login.client_id())
+
+def google_username(email, name):
+    """Tên đăng nhập chưa dùng, lấy từ phần trước @ của email (bỏ dấu, ký tự lạ): nguyenvan.a@gmail.com -> nguyenvan.a, trùng thì thêm số."""
+    base = re.sub(r"[^A-Za-z0-9_.]", "", unicodedata.normalize("NFD", email.split("@")[0]).replace("đ", "d").replace("Đ", "D"))[:26]
+    if len(base) < 3:
+        base = re.sub(r"[^A-Za-z0-9_.]", "", unicodedata.normalize("NFD", name.replace(" ", "")))[:26]
+    base = base if len(base) >= 3 else "nongdan"
+    for i in range(1000):
+        cand = base if i == 0 else f"{base[:26]}{i}"
+        if not taken("username", cand):
+            return cand
+    return f"nd{uuid.uuid4().hex[:10]}"
+
+@bp.post("/api/auth/google")
+def auth_google():
+    """Đăng nhập / đăng ký bằng Google: {credential: ID token từ nút Google}. Tài khoản cùng email đã có thì đăng nhập vào đó (và gắn
+    Google); chưa có thì tạo mới, email coi như đã xác thực (Google đã xác minh), chưa có SĐT (bổ sung trong hồ sơ), mật khẩu ngẫu nhiên
+    (muốn đăng nhập bằng mật khẩu thì dùng Quên mật khẩu)."""
+    if not google_login.client_id():
+        return err("Máy chủ chưa bật đăng nhập bằng Google", 503)
+    if not rate_limit(("google", client_ip()), 20, 15 * 60):
+        return err(TOO_MANY, 429)
+    try:
+        g = google_login.verify((request.get_json(silent=True) or {}).get("credential"))
+    except google_login.GoogleTokenError as e:
+        return err(str(e), 401)
+    except OSError:
+        return err("Không kết nối được tới Google, hãy thử lại sau", 503)
+    u = db().execute("SELECT * FROM users WHERE google_sub=?", (g["sub"],)).fetchone() or user_by_email(g["email"])
+    created = False
+    if u:
+        if u["locked"]:
+            return err(LOCKED, 403)
+        if u["google_sub"] and u["google_sub"] != g["sub"]:
+            return err("Email này đã gắn với một tài khoản Google khác", 409)
+        db().execute("UPDATE users SET google_sub=?, verified=1 WHERE id=?", (g["sub"], u["id"]))
+    else:
+        if taken("email", g["email"]):
+            return err("Email đã được sử dụng", 409)
+        if not rate_limit(("register", client_ip()), 10, 3600):
+            return err("Tạo quá nhiều tài khoản từ máy này, hãy thử lại sau 1 giờ", 429)
+        uname = google_username(g["email"], g["name"])
+        try:
+            uid = db().execute("INSERT INTO users(username,email,phone,pw,verified,google_sub) VALUES(?,?,NULL,?,1,?) RETURNING id",
+                               (uname, g["email"], generate_password_hash(secrets.token_urlsafe(32)), g["sub"])).fetchone()[0]
+        except IntegrityError:
+            return err("Tài khoản với email này vừa được tạo, hãy thử đăng nhập lại", 409)
+        u, created = db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone(), True
+    db().commit()
+    session.clear(); session["uid"] = u["id"]
+    return jsonify(ok=True, username=u["username"], created=created, need_phone=not u["phone"]), 201 if created else 200
+
 @bp.post("/api/logout")
 def logout():
     session.clear()
@@ -232,8 +288,9 @@ def ai_quota_ok():
         return True
     since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
     n = db().execute("SELECT (SELECT COUNT(*) FROM chats WHERE user_id=? AND role='user' AND created >= ?) + "
-                     "(SELECT COUNT(*) FROM diagnoses WHERE user_id=? AND source='ai' AND created >= ?)",
-                     (session["uid"], since, session["uid"], since)).fetchone()[0]
+                     "(SELECT COUNT(*) FROM diagnoses WHERE user_id=? AND source='ai' AND created >= ?) + "
+                     "(SELECT COUNT(*) FROM lookup_cache WHERE user_id=? AND created >= ?)",  # tìm thuốc, tìm cửa hàng bằng AI
+                     (session["uid"], since, session["uid"], since, session["uid"], since)).fetchone()[0]
     return n < AI_DAILY_LIMIT
 
 VAGUE_WORDS = {"unknown", "unidentified", "unidentifiable", "identifiable", "identified", "not", "clearly", "clear", "unclear", "from",
@@ -534,7 +591,7 @@ def predict():
                    notes=[f"Ảnh giống {sim:.0%} với một mẫu trong dữ liệu hệ thống đã học, hệ thống dùng lại kết quả của mẫu đó."])
         need_ai = False
     if need_ai:
-        a, why = None, "chưa cấu hình GEMINI_API_KEY"
+        a, why = None, "chưa cấu hình khóa Gemini"
         if not ai_quota_ok():
             why = f"bạn đã dùng hết {AI_DAILY_LIMIT} lượt AI hôm nay"
         elif ai_service.vision_available():
@@ -623,7 +680,7 @@ def reanalyze(did):
     if not ai_quota_ok():
         return err(f"Bạn đã dùng hết {AI_DAILY_LIMIT} lượt AI hôm nay, hãy thử lại ngày mai", 429)
     if not ai_service.vision_available():
-        return err("Chưa cấu hình GEMINI_API_KEY nên không phân tích lại được", 503)
+        return err("Chưa cấu hình khóa Gemini nên không phân tích lại được", 503)
     try:
         with open(os.path.join(current_app.config["UPLOAD_DIR"], d["image"]), "rb") as f:
             data = f.read()
@@ -699,7 +756,7 @@ def delete_diagnosis(did):
     d = get_diag(did)
     if not d:
         return err("Không tìm thấy kết quả chẩn đoán", 404)
-    for t in ("chats", "ratings"):
+    for t in ("chats", "ratings", "reports"):
         db().execute(f"DELETE FROM {t} WHERE diagnosis_id=? AND user_id=?", (did, session["uid"]))
     db().execute("UPDATE posts SET diagnosis_id=NULL WHERE diagnosis_id=?", (did,))  # bài đã chia sẻ thì bỏ thẻ kết quả
     db().execute("DELETE FROM diagnoses WHERE id=?", (did,))
@@ -1376,12 +1433,269 @@ def geocode():
         print("[weather] lỗi tìm địa danh:", repr(e), flush=True)
         return err("Không tìm được địa danh (máy chủ cần kết nối Internet)", 503)
 
+# ---------- Gợi ý thuốc (AI + Google Search); cửa hàng gần nhất là bản đồ Google Maps nhúng ở giao diện ----------
+PRODUCT_TTL_DAYS = 7    # cùng một bệnh dùng lại kết quả tìm kiếm (của mọi người dùng) trong 7 ngày: đỡ tốn lượt AI, trả lời ngay
+
+def cache_get(key, max_age):
+    r = db().execute("SELECT data, created FROM lookup_cache WHERE key=?", (key,)).fetchone()
+    if not r:
+        return None
+    created = datetime.strptime(str(r["created"])[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return dict(json.loads(r["data"]), cached_at=str(r["created"])[:19]) if datetime.now(timezone.utc) - created <= max_age else None
+
+def cache_put(key, data, uid=None):
+    db().execute("DELETE FROM lookup_cache WHERE key=?", (key,))
+    db().execute("INSERT INTO lookup_cache(key, data, user_id) VALUES(?,?,?)", (key, json.dumps(data, ensure_ascii=False), uid))
+    db().commit()
+
+def product_target(d):
+    """(bệnh, cây, hướng xử lý, khóa cache) cần tìm thuốc cho một kết quả, hoặc None (lá khỏe, thiên địch, chưa xác định)."""
+    det = json.loads(d["details"] or "{}")
+    if d["healthy"] or d["plant_id"] in ("unknown", "background") or (det.get("pest") or {}).get("beneficial"):
+        return None
+    pest = det.get("kind") == "pest"
+    plant = ((det.get("pest") or {}).get("hosts") or "cây trồng") if pest else d["plant"]
+    key = "products:" + (d["raw"] or f"{d['plant']}|{d['disease']}").lower()[:200]
+    return d["disease"], plant, d["remedy"] or "", key
+
+@bp.get("/api/diagnoses/<int:did>/products")
+@login_required
+def diagnosis_products(did):
+    """Gợi ý thuốc/chế phẩm cho kết quả tra cứu: AI (Gemini + Google Search) tìm sản phẩm đang bán, giá tham khảo, trang bán.
+    Dùng lại kết quả đã tìm cho cùng bệnh trong PRODUCT_TTL_DAYS ngày; ?refresh=1 tìm lại (tính một lượt AI)."""
+    d = get_diag(did)
+    if not d:
+        return err("Không tìm thấy kết quả chẩn đoán", 404)
+    target = product_target(d)
+    if not target:
+        return err("Kết quả này không cần dùng thuốc (cây khỏe, thiên địch hoặc chưa xác định được bệnh)", 400)
+    disease, plant, remedy, key = target
+    if request.args.get("refresh") != "1":
+        hit = cache_get(key, timedelta(days=PRODUCT_TTL_DAYS))
+        if hit:
+            return jsonify(hit)
+    if not ai_service.gemini_available():  # tìm bằng Google Search của Gemini
+        return err("Chưa cấu hình khóa Gemini nên chưa tìm được thuốc", 503)
+    if not ai_quota_ok():
+        return err(f"Bạn đã dùng hết {AI_DAILY_LIMIT} lượt AI hôm nay, hãy thử lại ngày mai", 429)
+    if not rate_limit(("products", session["uid"]), 5, 600):
+        return err(TOO_MANY, 429)
+    try:
+        data = shopping.find_products(disease, plant, remedy)
+    except Exception as e:
+        print("[ai] lỗi tìm thuốc:", repr(e), flush=True)
+        return err(f"Chưa tìm được thuốc: {ai_service.reason(e)}.", 503)
+    data.update(disease=disease, plant=plant)
+    cache_put(key, data, session["uid"])
+    return jsonify(dict(data, cached_at=utcnow()))
+
 @bp.get("/api/map")
 @login_required
 def case_map():
     """Điểm bệnh MAP_DAYS ngày qua của mọi người dùng cho bản đồ: tọa độ làm tròn ~1 km, gộp theo ô và tên bệnh, không kèm danh tính."""
     since = (datetime.now(timezone.utc) - timedelta(days=MAP_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
-    rows = db().execute("SELECT plant, disease, ROUND(lat, 2) lat, ROUND(lon, 2) lon, COUNT(*) n, MAX(created) last FROM diagnoses "
+    # PostgreSQL: cột lat/lon thêm bằng migration là kiểu real, ROUND(real, 2) không có -> ép sang NUMERIC (qua DOUBLE PRECISION, vì
+    # real -> numeric chỉ giữ 6 chữ số: 105.8549 thành 105.855 rồi làm tròn ra 105.86) và trả về số thực
+    r2 = lambda c: f"CAST(ROUND(CAST(CAST({c} AS DOUBLE PRECISION) AS NUMERIC), 2) AS DOUBLE PRECISION)"
+    rows = db().execute(f"SELECT plant, disease, {r2('lat')} lat, {r2('lon')} lon, COUNT(*) n, MAX(created) last FROM diagnoses "
                         "WHERE lat IS NOT NULL AND healthy=0 AND created>=? AND plant_id NOT IN ('unknown','background') "
-                        "GROUP BY plant, disease, ROUND(lat, 2), ROUND(lon, 2) ORDER BY n DESC LIMIT 2000", (since,)).fetchall()
+                        f"GROUP BY plant, disease, {r2('lat')}, {r2('lon')} ORDER BY n DESC LIMIT 2000", (since,)).fetchall()
     return jsonify(days=MAP_DAYS, points=[dict(r) for r in rows])
+
+# ---------- Báo kết quả sai (người dùng) và sửa nhãn (quản trị viên duyệt ở trang quản trị) ----------
+def label_info(cls):
+    """Nhãn đúng được chọn -> thông tin hiển thị như kết quả tra cứu, hoặc None nếu không phải lớp đã biết
+    (bệnh lá: lớp của mô hình hoặc AI đã học; sâu hại: loài INSECT204)."""
+    if not cls:
+        return None
+    if cls in pests.PESTS:
+        e = pest_entry(cls, 0)
+        return dict(kind="pest", raw=cls, plant_id="pest", plant=e["plant"], disease=e["disease"], healthy=e["healthy"],
+                    remedy=(f"Cây bị hại: {e['hosts']}. " if e["hosts"] and not e["beneficial"] else "") + e["remedy"])
+    mc = model_class(cls)
+    if mc or db().execute("SELECT 1 FROM ai_classes WHERE class_name=?", (cls,)).fetchone():
+        return dict(kind="leaf", raw=mc or cls, **class_info(mc or cls))
+    return None
+
+def move_sample(s, cls):
+    """Đổi nhãn một mẫu AI: chuyển ảnh sang thư mục lớp mới trong dataset_ai, cập nhật số mẫu của các lớp AI."""
+    root = current_app.config["AI_DATASET_DIR"]
+    rel = f"{cls}/{os.path.basename(s['path'])}"
+    try:
+        os.makedirs(os.path.join(root, cls), exist_ok=True)
+        os.replace(os.path.join(root, s["path"]), os.path.join(root, rel))
+    except OSError:
+        rel = s["path"]  # mất ảnh gốc: vẫn sửa nhãn trong CSDL
+    db().execute("UPDATE ai_samples SET class_name=?, path=? WHERE id=?", (cls, rel, s["id"]))
+    db().execute("UPDATE ai_classes SET samples=samples-1 WHERE class_name=?", (s["class_name"],))
+    db().execute("UPDATE ai_classes SET samples=samples+1 WHERE class_name=?", (cls,))
+    db().execute("DELETE FROM ai_classes WHERE samples<=0")
+
+def apply_label(did, cls, note):
+    """Quản trị viên xác nhận nhãn đúng cho một kết quả tra cứu: sửa kết quả, đổi nhãn và duyệt các mẫu AI của nó. Kết quả bệnh lá
+    chưa có mẫu nào (VD mô hình đoán sai) thì thêm ảnh vào dataset_ai làm mẫu đã duyệt, để lần huấn luyện sau học được ảnh thực tế này."""
+    info = label_info(cls)
+    d = db().execute("SELECT * FROM diagnoses WHERE id=?", (did,)).fetchone()
+    if not info or not d:
+        return None
+    det = json.loads(d["details"] or "{}")
+    det["notes"] = [note] + [n for n in det.get("notes") or [] if not n.startswith("Quản trị viên đã sửa")]
+    db().execute("UPDATE diagnoses SET plant_id=?, plant=?, disease=?, raw=?, healthy=?, remedy=?, details=? WHERE id=?",
+                 (info["plant_id"], info["plant"], info["disease"], info["raw"], int(info["healthy"]), info["remedy"],
+                  json.dumps(det, ensure_ascii=False), did))
+    samples = db().execute("SELECT * FROM ai_samples WHERE diagnosis_id=?", (did,)).fetchall()
+    for s in samples:
+        if s["class_name"] != info["raw"]:
+            move_sample(s, info["raw"])
+    db().execute("UPDATE ai_samples SET status='approved', reviewed=? WHERE diagnosis_id=?", (utcnow(), did))
+    if not samples and info["kind"] == "leaf" and d["image"]:
+        data = read_upload(image_url(d["image"]))
+        if data:
+            rel = f"{info['raw']}/{uuid.uuid4().hex}.jpg"
+            path = os.path.join(current_app.config["AI_DATASET_DIR"], rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+            db().execute("INSERT INTO ai_samples(user_id,diagnosis_id,class_name,path,confidence,embedding,embed_key,status,reviewed) "
+                         "VALUES(?,?,?,?,?,?,?,'approved',?)",
+                         (d["user_id"], did, info["raw"], rel, 1.0, current_app.model.embed(data).astype(np.float32).tobytes(),
+                          current_app.model.embed_key, utcnow()))
+            db().execute("UPDATE ai_classes SET samples=samples+1 WHERE class_name=?", (info["raw"],))
+    return info
+
+@bp.get("/api/diagnoses/<int:did>/report")
+@login_required
+def get_report(did):
+    if not get_diag(did):
+        return err("Không tìm thấy kết quả chẩn đoán", 404)
+    r = db().execute("SELECT id, class_name, plant, disease, note, status, answer, created, reviewed FROM reports "
+                     "WHERE diagnosis_id=? AND user_id=? ORDER BY id DESC LIMIT 1", (did, session["uid"])).fetchone()
+    return jsonify(dict(r) if r else None)
+
+@bp.post("/api/diagnoses/<int:did>/report")
+@login_required
+def report_wrong(did):
+    """Người dùng báo kết quả sai: chọn bệnh/loài đúng trong danh sách đã biết (class_name), hoặc ghi tên cây, tên bệnh nếu không có
+    trong danh sách. Mỗi kết quả giữ một báo cáo đang chờ (báo lại thì sửa báo cáo đó)."""
+    d = get_diag(did)
+    if not d:
+        return err("Không tìm thấy kết quả chẩn đoán", 404)
+    j = request.get_json(silent=True) or {}
+    cls = (j.get("class_name") or "").strip()[:200] or None
+    plant, disease, note = ((j.get(k) or "").strip() for k in ("plant", "disease", "note"))
+    if cls:
+        info = label_info(cls)
+        if not info:
+            return err("Bệnh / loài đã chọn không có trong danh sách", field="class_name")
+        if cls == d["raw"]:
+            return err("Bệnh bạn chọn trùng với kết quả hiện tại", field="class_name")
+        plant, disease = info["plant"], info["disease"]
+    elif not disease:
+        return err("Hãy chọn bệnh đúng trong danh sách hoặc ghi tên bệnh / sâu hại", field="disease")
+    if len(plant) > 80 or len(disease) > 120 or len(note) > 500:
+        return err("Nội dung quá dài (tên cây 80, tên bệnh 120, ghi chú 500 ký tự)", field="note")
+    if not rate_limit(("report", session["uid"]), 10, 600):
+        return err(TOO_MANY, 429)
+    old = db().execute("SELECT id FROM reports WHERE diagnosis_id=? AND user_id=? AND status='open'", (did, session["uid"])).fetchone()
+    vals = (cls, plant or None, disease, note or None)
+    if old:
+        db().execute("UPDATE reports SET class_name=?, plant=?, disease=?, note=?, created=CURRENT_TIMESTAMP WHERE id=?", vals + (old["id"],))
+    else:
+        db().execute("INSERT INTO reports(user_id,diagnosis_id,class_name,plant,disease,note,old_label) VALUES(?,?,?,?,?,?,?)",
+                     (session["uid"], did) + vals + (f"{d['plant']}: {d['disease']}",))
+    db().commit()
+    return jsonify(ok=True)
+
+# ---------- Thư viện bệnh lá và sâu hại (tra cứu không cần ảnh) ----------
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LEAF_DATASET = os.getenv("LEAF_DATASET_DIR", os.path.join(PROJECT_DIR, "dataset", "Plant_leave_diseases_dataset_without_augmentation"))
+PEST_DATASET = os.getenv("PEST_DATASET_DIR", os.path.join(PROJECT_DIR, "dataset", "INSECT204-A Novel Large-Scale Benchmark Dataset fo", "INSECT204"))
+
+@bp.get("/api/library")
+@login_required
+def library():
+    """Bệnh lá (lớp của mô hình + bệnh AI đã học, bỏ lớp "khỏe mạnh") và 204 loài sâu hại / thiên địch, kèm hướng xử lý.
+    plants[].healthy_class: lớp lá khỏe của từng cây (để người dùng chọn khi báo kết quả sai)."""
+    leaf, healthy = [], {}
+    for c in known_classes():
+        if vague_class(c["class_name"]):
+            continue
+        i = class_info(c["class_name"])
+        if i["healthy"]:
+            healthy.setdefault(i["plant_id"], c["class_name"])
+            continue
+        leaf.append(dict(class_name=c["class_name"], plant_id=i["plant_id"], plant=i["plant"], disease=i["disease"], remedy=i["remedy"],
+                         source="model" if model_class(c["class_name"]) else "ai"))
+    names = {c["plant_id"]: c["plant"] for c in leaf}
+    names.update({k: knowledge.PLANTS[k] for k in healthy if k in knowledge.PLANTS and k not in names})
+    pest = [dict(class_name=raw, name=e["disease"], group=pests.PESTS[raw]["group"], group_name=e["group_name"], hosts=e["hosts"],
+                 beneficial=e["beneficial"], remedy=e["remedy"]) for raw in sorted(pests.PESTS) for e in [pest_entry(raw, 0)]]
+    groups = [dict(id=k, name=v[0]) for k, v in pests.GROUPS.items() if any(p["group"] == k for p in pest)]
+    plants = [dict(id=k, name=v, healthy_class=healthy.get(k)) for k, v in sorted(names.items(), key=lambda x: x[1])]
+    return jsonify(plants=plants, diseases=leaf, pests=pest, groups=groups)
+
+@bp.get("/api/library/image")
+@login_required
+def library_image():
+    """Ảnh minh họa một lớp (?c=<tên lớp>): ảnh đầu tiên trong dataset (bệnh lá / INSECT204) hoặc mẫu AI (ưu tiên mẫu đã duyệt),
+    thu nhỏ một lần rồi lưu ở instance/library/. Không có ảnh -> 404 (giao diện hiện biểu tượng)."""
+    cls = request.args.get("c") or ""
+    if not label_info(cls):
+        abort(404)
+    out_dir = os.path.join(current_app.instance_path, "library")
+    name = hashlib.sha1(cls.encode()).hexdigest()[:20] + ".jpg"
+    if not os.path.exists(os.path.join(out_dir, name)):
+        src, folder = None, os.path.join(PEST_DATASET if cls in pests.PESTS else LEAF_DATASET, cls)
+        if os.path.isdir(folder):
+            src = next((os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.lower().endswith((".jpg", ".jpeg", ".png"))), None)
+        if not src:
+            s = db().execute("SELECT path FROM ai_samples WHERE class_name=? ORDER BY CASE WHEN status='approved' THEN 0 ELSE 1 END, id DESC "
+                             "LIMIT 1", (cls,)).fetchone()
+            src = s and os.path.join(current_app.config["AI_DATASET_DIR"], s["path"])
+        if not src or not os.path.exists(src):
+            abort(404)
+        from PIL import Image
+        os.makedirs(out_dir, exist_ok=True)
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((360, 360))
+            im.save(os.path.join(out_dir, name), "JPEG", quality=82)
+    return send_from_directory(out_dir, name, max_age=7 * 86400)
+
+# ---------- Thông báo đẩy (Web Push) ----------
+@bp.get("/api/push/key")
+@login_required
+def push_key():
+    return jsonify(key=push.public_key())
+
+@bp.post("/api/push/subscribe")
+@login_required
+def push_subscribe():
+    j = request.get_json(silent=True) or {}
+    ep, keys = (j.get("endpoint") or "").strip(), j.get("keys") or {}
+    if not re.fullmatch(r"https://\S{10,1000}", ep) or not keys.get("p256dh") or not keys.get("auth"):
+        return err("Thông tin đăng ký thông báo không hợp lệ")
+    db().execute("DELETE FROM push_subs WHERE endpoint=?", (ep,))  # thiết bị chuyển sang tài khoản khác
+    db().execute("INSERT INTO push_subs(user_id,endpoint,p256dh,auth) VALUES(?,?,?,?)",
+                 (session["uid"], ep, str(keys["p256dh"])[:200], str(keys["auth"])[:100]))
+    db().commit()
+    return jsonify(ok=True)
+
+@bp.post("/api/push/unsubscribe")
+@login_required
+def push_unsubscribe():
+    ep = ((request.get_json(silent=True) or {}).get("endpoint") or "").strip()
+    db().execute("DELETE FROM push_subs WHERE endpoint=? AND user_id=?", (ep, session["uid"]))
+    db().commit()
+    return jsonify(ok=True)
+
+@bp.post("/api/push/test")
+@login_required
+def push_test():
+    n = db().execute("SELECT COUNT(*) FROM push_subs WHERE user_id=?", (session["uid"],)).fetchone()[0]
+    if not n:
+        return err("Thiết bị này chưa bật thông báo", 400)
+    if not rate_limit(("push-test", session["uid"]), 5, 600):
+        return err(TOO_MANY, 429)
+    push.send(db(), current_app.config["DATABASE"], [session["uid"]], "Thông báo thử: thiết bị của bạn đã nhận được thông báo.", "/notifications")
+    return jsonify(ok=True, devices=n)

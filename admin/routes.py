@@ -6,7 +6,8 @@ from flask import Blueprint, current_app, jsonify, request, send_from_directory,
 from werkzeug.security import generate_password_hash
 import ai_service
 from core import (KeyStore, admin_required, check_login, db, drop_samples, err, image_url, is_pg, notify, post_out, post_rows,
-                  remove_upload, spa_page)
+                  remove_upload, spa_page, utcnow)
+from client.routes import apply_label, label_info, move_sample
 
 bp = Blueprint("admin", __name__)
 
@@ -80,12 +81,14 @@ def admin_stats():
         pending=one("SELECT COUNT(*) FROM posts WHERE status='pending'"),
         comments=one("SELECT COUNT(*) FROM comments"), flagged=one("SELECT COUNT(*) FROM comments WHERE ai_decision IS DISTINCT FROM 'approve'"),
         ratings=one("SELECT COUNT(*) FROM ratings"), rating_avg=round(one("SELECT COALESCE(AVG(stars), 0) FROM ratings"), 2),
-        samples=one("SELECT COUNT(*) FROM ai_samples"),
+        samples=one("SELECT COUNT(*) FROM ai_samples"), samples_pending=one("SELECT COUNT(*) FROM ai_samples WHERE status='pending'"),
+        reports_open=one("SELECT COUNT(*) FROM reports WHERE status='open'"),
         keys=dict(total=len(keys), enabled=sum(1 for k in keys if k["enabled"]), cooling=cooling),
         daily=[dict(day=d, n=per_day.get(d, 0)) for d in days],
         top=[dict(r) for r in db().execute("SELECT plant, disease, COUNT(*) n FROM diagnoses WHERE healthy=0 AND plant_id NOT IN "
                                            "('unknown', 'background') GROUP BY plant, disease ORDER BY n DESC LIMIT 6")],
-        classes=[dict(r) for r in db().execute("SELECT class_name, COUNT(*) n FROM ai_samples GROUP BY class_name ORDER BY n DESC")])
+        classes=[dict(r) for r in db().execute("SELECT class_name, COUNT(*) n, SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) approved "
+                                               "FROM ai_samples GROUP BY class_name ORDER BY n DESC")])
 
 @bp.get("/api/admin/analytics")
 @admin_required
@@ -260,7 +263,7 @@ def admin_delete_user(uid):
     files = [r[0] for r in db().execute("SELECT image FROM posts WHERE user_id=? UNION ALL SELECT image FROM diagnoses WHERE user_id=?", (uid, uid))]
     for t in ("post_likes", "comments", "post_shares"):
         db().execute(f"DELETE FROM {t} WHERE post_id IN (SELECT id FROM posts WHERE user_id=?) OR user_id=?", (uid, uid))
-    for t in ("posts", "chats", "ratings", "diagnoses", "notifications"):
+    for t in ("posts", "chats", "ratings", "diagnoses", "notifications", "reports", "push_subs"):
         db().execute(f"DELETE FROM {t} WHERE user_id=?", (uid,))
     db().execute("UPDATE ai_samples SET user_id=NULL WHERE user_id=?", (uid,))
     db().execute("DELETE FROM users WHERE id=?", (uid,))
@@ -402,9 +405,49 @@ def admin_settings():
 @bp.get("/api/admin/samples")
 @admin_required
 def admin_samples():
-    rows = db().execute("SELECT s.id, s.class_name, s.confidence, s.created, u.username, d.plant, d.disease, d.image FROM ai_samples s "
-                        "LEFT JOIN users u ON u.id=s.user_id LEFT JOIN diagnoses d ON d.id=s.diagnosis_id ORDER BY s.id DESC LIMIT 100").fetchall()
+    """Mẫu AI theo trạng thái (?status=pending: chờ duyệt, approved: đã duyệt, all), mới nhất trước."""
+    status = request.args.get("status", "pending")
+    where, params = ("WHERE s.status=? ", (status,)) if status in ("pending", "approved") else ("", ())
+    rows = db().execute("SELECT s.id, s.class_name, s.confidence, s.status, s.created, s.diagnosis_id, u.username, d.plant, d.disease, d.image, "
+                        "d.source FROM ai_samples s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN diagnoses d ON d.id=s.diagnosis_id "
+                        + where + "ORDER BY s.id DESC LIMIT 200", params).fetchall()
     return jsonify([dict(r, image_url=image_url(r["image"])) for r in rows])
+
+@bp.post("/api/admin/samples/approve")
+@admin_required
+def admin_approve_samples():
+    """Duyệt nhanh nhiều mẫu (nhãn AI đúng): {"ids": [...]}."""
+    ids = [int(i) for i in (request.get_json(silent=True) or {}).get("ids") or [] if str(i).isdigit()][:200]
+    if not ids:
+        return err("Chưa chọn mẫu nào")
+    db().execute(f"UPDATE ai_samples SET status='approved', reviewed=? WHERE id IN ({','.join('?' * len(ids))})", [utcnow()] + ids)
+    db().commit()
+    return jsonify(ok=True, approved=len(ids))
+
+@bp.post("/api/admin/samples/<int:sid>")
+@admin_required
+def admin_review_sample(sid):
+    """Duyệt một mẫu: {"action": "approve"} hoặc sửa nhãn {"action": "relabel", "class_name": ...} (sửa luôn kết quả tra cứu gốc)."""
+    s = db().execute("SELECT * FROM ai_samples WHERE id=?", (sid,)).fetchone()
+    if not s:
+        return err("Không tìm thấy mẫu dữ liệu", 404)
+    j = request.get_json(silent=True) or {}
+    if j.get("action") == "approve":
+        db().execute("UPDATE ai_samples SET status='approved', reviewed=? WHERE id=?", (utcnow(), sid))
+    elif j.get("action") == "relabel":
+        cls = (j.get("class_name") or "").strip()
+        info = label_info(cls)
+        if not info or info["kind"] != "leaf":
+            return err("Hãy chọn một bệnh lá có trong danh sách", field="class_name")
+        if s["diagnosis_id"] and db().execute("SELECT 1 FROM diagnoses WHERE id=?", (s["diagnosis_id"],)).fetchone():
+            apply_label(s["diagnosis_id"], info["raw"], f"Quản trị viên đã sửa kết quả thành: {info['plant']}, {info['disease'].lower()}.")
+        else:
+            move_sample(s, info["raw"])
+            db().execute("UPDATE ai_samples SET status='approved', reviewed=? WHERE id=?", (utcnow(), sid))
+    else:
+        return err("Thao tác không hợp lệ")
+    db().commit()
+    return jsonify(ok=True)
 
 @bp.delete("/api/admin/samples/<int:sid>")
 @admin_required
@@ -415,3 +458,51 @@ def admin_delete_sample(sid):
     drop_samples([s])
     db().commit()
     return jsonify(ok=True)
+
+# Báo kết quả sai của người dùng
+@bp.get("/api/admin/reports")
+@admin_required
+def admin_reports():
+    """?status=open (chờ xử lý, mặc định) hoặc done (đã xử lý)."""
+    done = request.args.get("status") == "done"
+    rows = db().execute("SELECT r.*, u.username, d.plant cur_plant, d.disease cur_disease, d.raw cur_raw, d.source, d.confidence, d.image, "
+                        "d.details FROM reports r LEFT JOIN users u ON u.id=r.user_id LEFT JOIN diagnoses d ON d.id=r.diagnosis_id "
+                        f"WHERE r.status {'<>' if done else '='} 'open' ORDER BY r.id DESC LIMIT 200").fetchall()
+    out = []
+    for r in rows:
+        r = dict(r)
+        det = json.loads(r.pop("details") or "{}")
+        r.update(image_url=image_url(r.pop("image")), kind=det.get("kind") or "leaf", top=(det.get("top") or [])[:3])
+        out.append(r)
+    return jsonify(out)
+
+@bp.post("/api/admin/reports/<int:rid>")
+@admin_required
+def admin_resolve_report(rid):
+    """Xử lý báo cáo: {"action": "accept", "class_name": nhãn đúng (mặc định nhãn người dùng chọn), "answer": lời nhắn} sửa kết quả,
+    đổi nhãn / thêm mẫu đã duyệt; {"action": "reject", "answer": lý do}. Người báo nhận thông báo kết quả."""
+    r = db().execute("SELECT * FROM reports WHERE id=?", (rid,)).fetchone()
+    if not r:
+        return err("Không tìm thấy báo cáo", 404)
+    if r["status"] != "open":
+        return err("Báo cáo này đã được xử lý")
+    j = request.get_json(silent=True) or {}
+    answer = (j.get("answer") or "").strip()[:300]
+    if j.get("action") == "accept":
+        info = label_info((j.get("class_name") or r["class_name"] or "").strip())
+        if not info:
+            return err("Hãy chọn nhãn đúng có trong danh sách", field="class_name")
+        if not apply_label(r["diagnosis_id"], info["raw"], f"Quản trị viên đã sửa kết quả thành: {info['plant']}, {info['disease'].lower()} "
+                                                            "(theo báo cáo kết quả sai)."):
+            return err("Kết quả tra cứu này không còn", 404)
+        status, msg = "accepted", f"Cảm ơn bạn đã báo kết quả sai. Quản trị viên đã sửa thành: {info['plant']}, {info['disease'].lower()}."
+        db().execute("UPDATE reports SET class_name=? WHERE id=?", (info["raw"], rid))
+    elif j.get("action") == "reject":
+        status, msg = "rejected", "Quản trị viên đã xem báo cáo kết quả sai của bạn và giữ nguyên kết quả."
+    else:
+        return err("Thao tác không hợp lệ")
+    db().execute("UPDATE reports SET status=?, answer=?, reviewed_by=?, reviewed=? WHERE id=?", (status, answer or None, session["uid"], utcnow(), rid))
+    if r["user_id"]:
+        notify(r["user_id"], msg + (f" Ghi chú: {answer}" if answer else ""), f"/diagnosis/{r['diagnosis_id']}")
+    db().commit()
+    return jsonify(ok=True, status=status)

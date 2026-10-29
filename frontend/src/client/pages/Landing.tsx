@@ -26,7 +26,7 @@ export default function Landing() {
           <Brand className="mr-auto" />
           <ThemeToggle />
           <Button asChild variant="ghost" className="hidden sm:inline-flex"><Link to="/login">Đăng nhập</Link></Button>
-          <Button asChild><Link to="/register"><span className="sm:hidden">Đăng ký</span><span className="hidden sm:inline">Dùng thử miễn phí</span></Link></Button>
+          <Button asChild><Link to="/register">Đăng ký</Link></Button>
         </div>
       </header>
 

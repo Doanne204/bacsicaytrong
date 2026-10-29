@@ -16,6 +16,15 @@
   tên khoa học, nhóm, cây bị hại, hướng phòng trừ theo IPM; thiên địch (bọ rùa, bọ ngựa, bọ xít bắt mồi...) được đánh dấu "có ích, đừng phun".
   Ảnh khác xa các loài đã học (`models/pest_centroids.npz`) hoặc độ tin cậy dưới 50% -> "Chưa xác định được loài" kèm 3 loài gần nhất.
 - **Đăng bài**: chữ + ảnh; Gemini kiểm duyệt cả chữ và ảnh. Vi phạm -> từ chối, báo lý do ngay và gửi thông báo; không chắc chắn -> chờ quản trị viên duyệt.
+- **Thuốc nên dùng và nơi mua** (trang kết quả, bệnh lá và sâu hại; bấm mới tìm): Gemini có Google Search tìm sản phẩm đang bán ở Việt
+  Nam (tên, hoạt chất, sinh học/hóa học, cách dùng, giá tham khảo, trang bán). Đường dẫn AI đưa ra được mở thử, chỉ giữ trang thật
+  (hoặc trang cùng cửa hàng trong danh sách nguồn Google), ảnh lấy từ og:image của trang đó; mở trang ngoài có chặn địa chỉ nội bộ
+  (`shopping.py`). Kết quả dùng chung cho cùng bệnh 7 ngày (`lookup_cache`), mỗi lần tìm mới tính một lượt AI.
+  Dưới danh sách thuốc (và cuối trang Bản đồ sâu bệnh) là bản đồ Google Maps nhúng tìm sẵn "cửa hàng thuốc bảo vệ thực vật" quanh
+  vị trí vườn: Google tự ghim cửa hàng, bấm ghim xem địa chỉ, giờ mở cửa, chỉ đường; không tốn lượt AI (trước đây Gemini + Google Maps
+  tìm rồi viết danh sách, hay lỗi và tọa độ đổi từ địa chỉ bị lệch nên đã bỏ).
+- **Bản đồ sâu bệnh** (`/map`): vườn của tôi, bán kính 5/10/30/60 km, ca bệnh 60 ngày qua (làm tròn ~1 km, không lộ danh tính),
+  danh sách bệnh đang có quanh vườn, bản đồ Google Maps các cửa hàng thuốc BVTV gần vườn.
 - **Tra cứu nhiều ảnh** (trang Tra cứu, ô "Ảnh thêm"): 1 ảnh bắt buộc + tối đa 2 ảnh thêm của cùng cây / cùng con sâu (lá bệnh khác,
   góc khác). Mỗi ảnh dự đoán riêng, ảnh không phải lá hoặc khác xa dữ liệu đã học bị loại, xác suất các ảnh còn lại lấy trung bình;
   các ảnh kết luận khác nhau thì ghi chú và nhờ AI xem lại; AI nhận cả 3 ảnh trong một lần gọi. Ảnh thêm lưu `<ảnh chính>-p2.jpg`,
@@ -30,6 +39,12 @@
 - **Mức độ bệnh**: ước lượng mức độ
   bệnh (% diện tích lá đổi màu, đúng phần tô hồng ở tab Vết bệnh) xếp nhẹ / trung bình / nặng kèm lời khuyên. Phiếu chẩn đoán in ra giấy hoặc
   lưu PDF, có mã QR mở lại kết quả. Đọc kết quả thành tiếng, hỏi chatbot bằng giọng nói (Web Speech API, Chrome).
+- **Đăng ký / đăng nhập bằng Google** (`google_login.py`, nút Google ở trang Đăng ký và Đăng nhập, chỉ hiện khi có `GOOGLE_CLIENT_ID`):
+  máy chủ kiểm tra ID token qua Google (đúng mã ứng dụng, chưa hết hạn, email đã xác minh). Email đã có tài khoản thì đăng nhập vào đó
+  và gắn Google; chưa có thì tạo tài khoản mới (tên đăng nhập lấy từ email, chưa có SĐT, bổ sung trong hồ sơ; muốn đăng nhập bằng mật
+  khẩu thì dùng Quên mật khẩu). Cấu hình: Google Cloud Console -> APIs & Services -> Credentials -> Create credentials -> OAuth client ID
+  -> Web application; Authorized JavaScript origins thêm `http://localhost:5000` (và địa chỉ HTTPS nếu chạy cho máy khác, Google không
+  nhận `http://<IP LAN>`); chép Client ID vào `.env`: `GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com`, khởi động lại máy chủ.
 - **Tài khoản**: đăng ký phải xác thực email bằng mã 6 số (15 phút); quên mật khẩu qua email. Gửi mail bằng SMTP cấu hình trong `.env`
   (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`; Gmail dùng mật khẩu ứng dụng, cổng 587). Chưa cấu hình SMTP thì mã in ra
   log và hiện ngay trên giao diện (chỉ để thử). Giới hạn tần suất: 10 lần đăng nhập sai / 15 phút, 10 tài khoản / giờ mỗi IP, 10 bình
@@ -51,6 +66,28 @@
   1 = theo dõi, 2 = vừa, >= 3 = cao; cảnh báo liên quan đến cây người dùng đã tra cứu / đang theo dõi xếp trước. Kèm ca bệnh của bà con
   trong 30 km / 14 ngày và bản đồ ca bệnh 60 ngày (Leaflet + OpenStreetMap, tọa độ làm tròn ~1 km, không kèm danh tính; kết quả tra cứu
   được ghim theo vị trí đã lưu). Lệnh `remind` mỗi sáng gửi thông báo/email cho cảnh báo mức cao (mỗi người một lần/ngày).
+- **Báo kết quả sai và duyệt nhãn** (trang kết quả, mục "Kết quả sai?"): người dùng chọn bệnh / loài đúng trong danh sách (bệnh lá của
+  mô hình và AI đã học, lá khỏe của từng cây, 204 loài sâu hại) hoặc tự ghi tên cây, tên bệnh. Trang quản trị "Dữ liệu AI":
+  - Chờ duyệt: ảnh Gemini gán nhãn được lưu vào `dataset_ai/` ở trạng thái chờ duyệt (bảng `ai_samples.status`; mẫu có từ trước khi có
+    bước này cũng là chờ duyệt). Quản trị viên duyệt (từng ảnh hoặc cả trang), sửa nhãn (ảnh chuyển sang thư mục lớp mới, kết quả tra cứu
+    gốc sửa theo) hoặc xóa.
+  - Báo kết quả sai: chấp nhận nhãn người dùng chọn hoặc chọn nhãn khác -> sửa kết quả, mẫu AI của kết quả đó đổi nhãn và được duyệt;
+    kết quả do mô hình đoán sai thì ảnh được thêm vào `dataset_ai/` làm mẫu đã duyệt (ảnh thực tế ngoài đồng cho lần huấn luyện sau).
+    Từ chối kèm lý do. Người báo nhận thông báo kết quả.
+  - Huấn luyện lại chỉ với ảnh đã duyệt: `flask --app app export-dataset dataset_ai_duyet` (chép ảnh đã duyệt theo lớp, xuất lại từ đầu
+    mỗi lần) rồi `python train.py --data ... --extra dataset_ai_duyet`.
+- **Thư viện sâu bệnh** (`/library`): xem không cần chụp ảnh các bệnh lá (lớp của mô hình + bệnh AI đã học) và 204 loài sâu hại /
+  thiên địch, tìm không dấu, lọc theo cây hoặc nhóm sâu; ảnh minh họa lấy ảnh đầu tiên của lớp trong `dataset/` (hoặc mẫu AI), thu nhỏ
+  lưu ở `instance/library/` (`LEAF_DATASET_DIR`, `PEST_DATASET_DIR` nếu dataset để chỗ khác). Bấm một bệnh: cách xử lý, nút hỏi trợ lý AI
+  (câu hỏi soạn sẵn qua `/chat?q=`).
+- **Cài lên điện thoại (PWA) và thông báo đẩy**: service worker `frontend/public/sw.js` (Flask phục vụ ở `/sw.js`): có mạng thì luôn lấy
+  bản mới, mất mạng vẫn mở được app và xem dữ liệu đã mở trước đó (lịch sử, kết quả, nhật ký, thư viện...), thanh trên báo "Đang ngoại
+  tuyến"; đăng xuất thì xóa dữ liệu đã lưu trên máy. Hồ sơ -> "Ứng dụng trên điện thoại": nút Cài đặt (khi trình duyệt cho phép) và bật
+  thông báo đẩy cho thiết bị (`push.py`, thư viện `pywebpush`): mọi thông báo trong app (nhắc việc, cảnh báo thời tiết của lệnh `remind`,
+  duyệt bài, trả lời báo cáo, thông báo của quản trị viên) cũng được đẩy tới điện thoại / máy tính, kể cả khi không mở app. Khóa VAPID tự
+  tạo ở `instance/vapid_private.pem` (hoặc `VAPID_KEY_FILE`; liên hệ gửi kèm: `VAPID_SUBJECT`, mặc định email `MAIL_FROM`). Cần HTTPS
+  (điện thoại dùng `https://<IP>:5443`; chứng chỉ tự ký có thể bị trình duyệt từ chối đăng ký thông báo, khi đó cần tên miền có HTTPS thật);
+  iPhone phải "Thêm vào MH chính" rồi mở từ đó mới bật được.
 - **Lịch sử tra cứu**: nhóm theo ngày, có ảnh, lọc theo ngày.
 - **Đánh giá**: chấm 1-5 sao cho kết quả tra cứu của mình; trang tổng hợp điểm trung bình, phân bố sao, đánh giá gần đây.
 - **Chatbot**: theo từng kết quả tra cứu hoặc hỏi chung; giữ lịch sử, gợi ý câu hỏi, hiển thị nguồn trả lời (Gemini / Claude / ngoại tuyến).
@@ -65,7 +102,7 @@
   - Thống kê: tra cứu 12 tháng theo nguồn, bảng bệnh theo tháng, độ chính xác suy từ đánh giá sao (4-5 sao = đúng), lượt AI 30 ngày.
   - Đánh giá mô hình: ma trận nhầm lẫn, precision/recall/F1 từng lớp đọc từ `results/` (train.py, train_pests.py); tab "So sánh kiến trúc"
     đọc `results/compare/summary.csv` do `compare_models.py` ghi ra (xem "So sánh kiến trúc").
-  - Dữ liệu AI: xóa mẫu AI dán nhãn sai.
+  - Dữ liệu AI: duyệt / sửa nhãn / xóa mẫu AI, xử lý báo kết quả sai của người dùng (xem "Báo kết quả sai và duyệt nhãn").
   - Khóa Gemini: thêm nhiều khóa (lưu mã hóa bằng khóa suy ra từ `SECRET_KEY`, chỉ hiện 4 ký tự đầu/cuối), kiểm tra, bật/tắt,
     đổi tên, xóa, mở lại khóa đang tạm hết lượt; sửa thứ tự model. Xoay vòng: mỗi lần gọi bắt đầu từ khóa kế tiếp; khóa hết hạn mức
     với một model thì thử khóa khác cùng model, mọi khóa đều hết mới xuống model sau; khóa sai bị bỏ qua 1 giờ.
@@ -123,7 +160,8 @@ và thời gian huấn luyện. ViT-B/16 lấy từ `keras-hub` (preset `vit_bas
 2. Tải dataset (https://data.mendeley.com/datasets/tywbtsjrjv/1), giải nén vào `dataset/` (39 thư mục lớp, gồm `Background_without_leaves`).
 3. Huấn luyện: `python train.py --data dataset/Plant_leave_diseases_dataset_without_augmentation --epochs 8`
    (nên dùng GPU / Google Colab, sau đó chép thư mục `models/` về, nhớ chép cả `class_names.json`).
-   Gộp ảnh AI đã thu thập: thêm `--extra dataset_ai` (lớp dưới `--min_images` ảnh, mặc định 20, sẽ bị bỏ qua).
+   Gộp ảnh AI đã được duyệt: `flask --app app export-dataset dataset_ai_duyet` rồi thêm `--extra dataset_ai_duyet` (lớp dưới `--min_images`
+   ảnh, mặc định 20, sẽ bị bỏ qua).
    Sau khi có mô hình (hoặc mỗi lần huấn luyện lại), tính tâm các lớp để nhận ra ảnh cây lạ:
    `flask --app app build-centroids dataset/Plant_leave_diseases_dataset_without_augmentation`
    Mô hình sâu hại (bộ INSECT204 giải nén vào `dataset/`, mỗi loài một thư mục):
@@ -173,4 +211,4 @@ và thời gian huấn luyện. ViT-B/16 lấy từ `keras-hub` (preset `vit_bas
 Chia train/val/test 70/15/15 theo từng ảnh, stratified theo lớp (danh sách ảnh của từng tập lưu ở `results/split.csv`); báo cáo accuracy, precision/recall/F1 từng lớp, ma trận nhầm lẫn (train.py in sẵn).
 Lưu ý: PlantVillage chụp nền đơn giản trong phòng lab, nên ảnh thực tế ngoài đồng có thể kém chính xác hơn -> nên nêu rõ hạn chế này và thử nghiệm thêm ảnh thực địa.
 Với Cam, Việt quất, Mâm xôi, Đậu nành, Bí, dữ liệu chỉ có 1 lớp nên mô hình không phân biệt được lá khỏe/bệnh; app chuyển sang AI phân tích cho các cây này.
-Nhãn do AI gán có thể sai (VD: nhầm mốc sương với đốm vòng), cần quản trị viên rà soát mẫu trong `dataset_ai/` trước khi huấn luyện lại.
+Nhãn do AI gán có thể sai (VD: nhầm mốc sương với đốm vòng), nên chỉ ảnh quản trị viên đã duyệt mới được xuất ra để huấn luyện lại (`export-dataset`).

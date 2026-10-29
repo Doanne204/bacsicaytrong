@@ -6,6 +6,8 @@ import { AlertTriangle, ArrowLeft, Bug, Clock, Database, Leaf, MessageCircle, No
 import { SpeakButton } from "@/shared/components/speech";
 import { TrackDialog } from "../components/journal";
 import { LesionViewer } from "../components/lesion";
+import { ShopSuggestions } from "../components/shop";
+import { ReportBlock } from "../components/report";
 import { api, del, send, type Diagnosis as Diag } from "@/shared/lib/api";
 import { fmtDate, fmtTime, pct, toDate } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
@@ -99,6 +101,7 @@ export default function Diagnosis() {
               <ul className="divide-y rounded-2xl border bg-card">{others.map((t) => <li key={t.raw} className="flex justify-between gap-4 px-4 py-3 text-sm"><b>{t.disease}</b><span className="text-muted-foreground">{t.plant}, {pct(t.prob)}</span></li>)}</ul>
             </TabsContent>
           </Tabs>
+          {!unknown && !notPlant && !d.healthy && !det.demo && <ShopSuggestions d={d} />}
 
           <div className="grid gap-2 sm:grid-cols-2">
             <Button asChild size="lg" className="sm:col-span-2"><Link to={`/chat/${d.id}`}><MessageCircle />Hỏi trợ lý AI về kết quả này</Link></Button>
@@ -110,6 +113,7 @@ export default function Diagnosis() {
             {retryAlt && <Button variant="ghost" className="sm:col-span-2" loading={retrying} onClick={retry}><Sparkles />Kết quả chưa đúng? Phân tích lại bằng AI</Button>}
           </div>
           <RateBlock d={d} onSaved={() => { q.refetch(); qc.invalidateQueries({ queryKey: ["history"] }); }} />
+          <ReportBlock d={d} />
           <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setConfirm(true)}><Trash2 />Xóa khỏi lịch sử</Button>
           {track && <TrackDialog open={track} onOpenChange={setTrack} diagnosis={{ id: d.id, plant: d.plant, disease: d.disease }} />}
           <ConfirmDialog open={confirm} onOpenChange={setConfirm} title="Xóa kết quả tra cứu này?" description="Cuộc trò chuyện và đánh giá kèm theo cũng bị xóa." confirmText="Xóa" danger

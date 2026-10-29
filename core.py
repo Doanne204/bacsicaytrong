@@ -22,19 +22,24 @@ CREATE TABLE IF NOT EXISTS comments(id INTEGER PRIMARY KEY, post_id INTEGER NOT 
 CREATE TABLE IF NOT EXISTS post_shares(id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL, user_id INTEGER NOT NULL, kind TEXT NOT NULL, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, content TEXT NOT NULL, link TEXT, read INTEGER NOT NULL DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS ai_classes(class_name TEXT PRIMARY KEY, plant_id TEXT NOT NULL, plant TEXT NOT NULL, disease TEXT NOT NULL, healthy INTEGER NOT NULL, remedy TEXT, samples INTEGER NOT NULL DEFAULT 0, updated TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS ai_samples(id INTEGER PRIMARY KEY, user_id INTEGER, diagnosis_id INTEGER, class_name TEXT NOT NULL, path TEXT NOT NULL, confidence REAL, embedding BLOB, embed_key TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS ai_samples(id INTEGER PRIMARY KEY, user_id INTEGER, diagnosis_id INTEGER, class_name TEXT NOT NULL, path TEXT NOT NULL, confidence REAL, embedding BLOB, embed_key TEXT, status TEXT NOT NULL DEFAULT 'pending', reviewed TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS ai_keys(id INTEGER PRIMARY KEY, label TEXT NOT NULL, key_enc TEXT NOT NULL, key_hash TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, ok_count INTEGER NOT NULL DEFAULT 0, fail_count INTEGER NOT NULL DEFAULT 0, last_used TEXT, last_error TEXT, last_error_at TEXT, cooldowns TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS email_codes(id INTEGER PRIMARY KEY, email TEXT NOT NULL, code TEXT NOT NULL, purpose TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS treatments(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, diagnosis_id INTEGER, name TEXT, plant TEXT, disease TEXT, status TEXT NOT NULL DEFAULT 'active', created TEXT DEFAULT CURRENT_TIMESTAMP, closed TEXT);
 CREATE TABLE IF NOT EXISTS treatment_logs(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'khac', content TEXT, image TEXT, done_at TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, due TEXT NOT NULL, repeat_days INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS lookup_cache(key TEXT PRIMARY KEY, data TEXT NOT NULL, user_id INTEGER, created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY, user_id INTEGER, diagnosis_id INTEGER NOT NULL, class_name TEXT, plant TEXT, disease TEXT, note TEXT, old_label TEXT, status TEXT NOT NULL DEFAULT 'open', answer TEXT, reviewed_by INTEGER, reviewed TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS push_subs(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created TEXT DEFAULT CURRENT_TIMESTAMP);
 """
 # Cột thêm vào CSDL tạo từ phiên bản cũ (CREATE TABLE IF NOT EXISTS không tự thêm cột)
 MIGRATIONS = {"users": {"phone": "TEXT", "role": "TEXT NOT NULL DEFAULT 'user'", "locked": "INTEGER NOT NULL DEFAULT 0",
-                        "verified": "INTEGER NOT NULL DEFAULT 0", "lat": "REAL", "lon": "REAL", "place": "TEXT", "weather_notified": "TEXT"},
+                        "verified": "INTEGER NOT NULL DEFAULT 0", "lat": "REAL", "lon": "REAL", "place": "TEXT", "weather_notified": "TEXT",
+                        "google_sub": "TEXT"},
               "diagnoses": {"image": "TEXT", "source": "TEXT DEFAULT 'model'", "details": "TEXT", "lat": "REAL", "lon": "REAL"},
-              "ai_samples": {"embedding": "BLOB", "embed_key": "TEXT"},
+              # mẫu AI có từ trước khi có bước duyệt: chưa ai rà soát nên cũng là "chờ duyệt"
+              "ai_samples": {"embedding": "BLOB", "embed_key": "TEXT", "status": "TEXT NOT NULL DEFAULT 'pending'", "reviewed": "TEXT"},
               "chats": {"image": "TEXT"},
               "posts": {"diagnosis_id": "INTEGER", "shared_post_id": "INTEGER"}}
 
@@ -57,7 +62,8 @@ ext.register_type(ext.new_type(ext.DECIMAL.values, "DECIMAL_FLOAT", lambda v, cu
 ext.register_adapter(bool, lambda b: ext.AsIs(int(b)))
 IntegrityError = (sqlite3.IntegrityError, psycopg2.IntegrityError)
 TABLES = ["users", "diagnoses", "chats", "ratings", "posts", "post_likes", "comments", "post_shares", "notifications",
-          "ai_classes", "ai_samples", "ai_keys", "settings", "treatments", "treatment_logs", "reminders"]
+          "ai_classes", "ai_samples", "ai_keys", "settings", "treatments", "treatment_logs", "reminders", "lookup_cache",
+          "reports", "push_subs"]
 
 def is_pg(target):
     return str(target).startswith(("postgresql://", "postgres://"))
@@ -285,7 +291,17 @@ def admin_required(f):
     return w
 
 def notify(user_id, content, link=""):
+    """Thông báo trong app, đồng thời đẩy tới điện thoại / trình duyệt người đó đã bật thông báo (push.py)."""
     db().execute("INSERT INTO notifications(user_id,content,link) VALUES(?,?,?)", (user_id, content, link))
+    push_out(db(), [user_id], content, link)
+
+def push_out(c, user_ids, content, link=""):
+    """Đẩy thông báo; lỗi gửi không làm hỏng việc chính (thông báo trong app đã lưu)."""
+    try:
+        import push
+        push.send(c, current_app.config["DATABASE"], user_ids, content, link)
+    except Exception as e:
+        print("[push] không gửi được:", repr(e)[:200], flush=True)
 
 def utcnow():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -305,6 +321,10 @@ def deliver_reminders(c, uid=None, email=False):
         c.execute("UPDATE reminders SET notified=1 WHERE id=?", (r["id"],))
         by_user.setdefault((r["user_id"], r["email"]), []).append((r["content"], title))
     c.commit()
+    if not uid:  # chạy theo lịch: đẩy về điện thoại (người đang mở app thì đã thấy trong app)
+        for r in rows:
+            title = r["name"] or f"{r['plant']}: {r['disease']}"
+            push_out(c, [r["user_id"]], f"Đến hạn: {r['content']} ({title})", f"/journal/{r['treatment_id']}")
     if email and mail_configured():
         import emails
         for (_, to), items in by_user.items():
@@ -341,8 +361,9 @@ def weather_notify(c):
         if not alerts:
             continue
         names = ", ".join(a["name"] for a in alerts[:3])
-        c.execute("INSERT INTO notifications(user_id,content,link) VALUES(?,?,?)",
-                  (u["id"], f"Cảnh báo thời tiết: nguy cơ cao {names} trong những ngày tới" + (f" tại {u['place']}" if u["place"] else ""), "/weather"))
+        text = f"Cảnh báo thời tiết: nguy cơ cao {names} trong những ngày tới" + (f" tại {u['place']}" if u["place"] else "")
+        c.execute("INSERT INTO notifications(user_id,content,link) VALUES(?,?,?)", (u["id"], text, "/weather"))
+        push_out(c, [u["id"]], text, "/weather")
         sent += 1
         if mail_configured():
             import emails

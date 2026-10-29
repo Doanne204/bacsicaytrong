@@ -4,10 +4,11 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 # Để trống (không xóa) để .env không nạp giá trị thật khi chạy test: không gọi AI thật, không gửi email thật qua SMTP của người dùng
-for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "SMTP_HOST", "SMTP_USER", "SMTP_PASS", "MAIL_FROM", "APP_URL"):
+for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "SMTP_HOST", "SMTP_USER", "SMTP_PASS", "MAIL_FROM", "APP_URL", "GOOGLE_CLIENT_ID"):
     os.environ[k] = ""
 os.environ["MODEL_PATH"] = os.path.join(ROOT, "khong_co_mo_hinh.keras")  # test chạy ở chế độ DEMO, không nạp TensorFlow
 os.environ["PEST_MODEL_PATH"] = os.path.join(ROOT, "khong_co_mo_hinh_sau.keras")  # mô hình sâu hại thay bằng FakePests
+os.environ["VAPID_KEY_FILE"] = os.path.join(tempfile.mkdtemp(), "vapid.pem")  # không ghi khóa thông báo đẩy vào instance/ thật
 import numpy as np
 from PIL import Image
 from werkzeug.security import generate_password_hash
@@ -17,6 +18,8 @@ import core
 from core import connect, create_pg_database
 from model_service import pest_entry, thumb_embedding
 import pests
+import pywebpush
+import push as push_mod
 
 # Mặc định chạy trên file SQLite tạm. Đặt TEST_DATABASE_URL=postgresql://.../bacsicaytrong_test để chạy toàn bộ trên PostgreSQL
 # (mỗi test một schema riêng, xóa khi xong).
@@ -232,6 +235,81 @@ class LesionTests(Base):
         self.assertNotIn("cams", d["details"]); self.assertNotIn("cam_url", d["details"]); self.assertTrue(d["details"]["lesion_available"])
         url = self.c.get(f"/api/diagnoses/{did}/lesion").get_json()["url"]
         self.assertEqual(self.get_status(url), 200); self.assertEqual(self.c.get(f"/api/diagnoses/{did}").get_json()["details"]["lesion_url"], url)
+
+class GoogleLoginTests(Base):
+    """Đăng ký / đăng nhập bằng Google: máy chủ kiểm tra ID token qua tokeninfo của Google (giả lập, không gọi mạng)."""
+    CID = "123-abc.apps.googleusercontent.com"
+    def google(self, sub="g-1", email="Nong.Dan.A@gmail.com", **over):
+        info = {**dict(aud=self.CID, iss="https://accounts.google.com", exp=str(int(time.time()) + 600), email=email, email_verified="true",
+                       sub=sub, name="Nông Dân A"), **over}
+        with mock.patch.dict(os.environ, {"GOOGLE_CLIENT_ID": self.CID}),              mock.patch("google_login.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(info).encode())):
+            return self.c.post("/api/auth/google", json={"credential": "x" * 50})
+    def test_disabled_without_client_id(self):
+        self.assertIsNone(self.c.get("/api/auth/config").get_json()["google_client_id"])
+        self.assertEqual(self.c.post("/api/auth/google", json={"credential": "x"}).status_code, 503)
+        with mock.patch.dict(os.environ, {"GOOGLE_CLIENT_ID": self.CID}):
+            self.assertEqual(self.c.get("/api/auth/config").get_json()["google_client_id"], self.CID)
+    def test_signup_then_signin(self):
+        r = self.google(); j = r.get_json()
+        self.assertEqual(r.status_code, 201); self.assertEqual((j["username"], j["created"], j["need_phone"]), ("nong.dan.a", True, True))
+        me = self.c.get("/api/me").get_json(); self.assertEqual((me["email"], me["phone"]), ("nong.dan.a@gmail.com", None))
+        self.assertEqual(self.sql("select verified, google_sub from users"), [(1, "g-1")])  # Google đã xác minh email
+        self.c.post("/api/logout")
+        r = self.google(); self.assertEqual(r.status_code, 200); self.assertFalse(r.get_json()["created"])
+        self.assertEqual(len(self.sql("select id from users")), 1)
+        self.c.post("/api/logout"); self.signup("nong.dan.a", "khac@b.vn", ph="0987654321")  # trùng tên -> thêm số
+        self.c.post("/api/logout"); self.assertEqual(self.google(sub="g-2", email="nong.dan.a@yahoo.com").get_json()["username"], "nong.dan.a1")
+    def test_links_existing_email_and_rejects_bad_tokens(self):
+        self.signup(verify=False)  # tài khoản cũ cùng email, chưa xác thực
+        r = self.google(email="a@b.vn"); self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.get_json()["username"], r.get_json()["need_phone"]), ("nguyenvan", False))
+        self.assertEqual(self.sql("select verified, google_sub from users"), [(1, "g-1")])
+        self.c.post("/api/logout")
+        self.assertEqual(self.google(sub="g-9", email="a@b.vn").status_code, 409)  # email đã gắn tài khoản Google khác
+        for bad in (dict(aud="app-khac"), dict(email_verified="false"), dict(iss="evil.com"), dict(exp="1")):
+            self.assertEqual(self.google(sub="g-3", email="moi@gmail.com", **bad).status_code, 401, bad)
+        self.assertEqual(self.c.get("/api/me").status_code, 401)
+        self.run_sql("UPDATE users SET locked=1"); self.assertEqual(self.google(email="a@b.vn").status_code, 403)
+
+class ShoppingTests(Base):
+    """Gợi ý thuốc (AI + Google Search, kiểm tra trang bán thật) và cửa hàng gần (AI + Google Maps, tọa độ từ địa chỉ). Không gọi mạng thật."""
+    AI_TEXT = '```json\n{"products":[{"name":"Anvil 5SC","active_ingredient":"Hexaconazole 50 g/l","kind":"hoa_hoc","description":"Trị nấm",' \
+              '"usage":"20 ml/16 l","pack":"chai 1 l","price_vnd":"185.000","shop":"Nông Nghiệp Xanh","url":"https://shop.vn/anvil"},' \
+              '{"name":"Trichoderma","kind":"sinh học","price_vnd":null,"url":"https://chet.vn/x","shop":"kho.vn"},{"name":""}],"note":"Đọc nhãn."}\n```'
+    META = {"groundingChunks": [{"web": {"uri": "https://vertexaisearch.cloud.google.com/r/1", "title": "kho.vn"}}]}
+    def test_url_safety(self):
+        import shopping
+        for u in ("http://127.0.0.1/", "http://localhost:5000/", "ftp://example.com/", "http://10.0.0.5/", "https://example.com:8443/"):
+            self.assertFalse(shopping._safe_url(u), u)
+    def test_find_products_checks_links(self):
+        import shopping
+        pages = {"https://shop.vn/anvil": ("https://shop.vn/anvil", "Anvil 5SC", "https://shop.vn/a.jpg"),
+                 "https://kho.vn/tricho": ("https://kho.vn/tricho", "Trichoderma", None)}
+        with mock.patch.object(ai_service, "_gemini", return_value=(self.AI_TEXT, self.META)) as g, \
+             mock.patch.object(shopping, "_redirect_target", return_value="https://kho.vn/tricho"), \
+             mock.patch.object(shopping, "page_info", side_effect=lambda u: pages.get(u)):
+            r = shopping.find_products("Bệnh đốm vòng", "Cà chua", "phun mancozeb")
+        self.assertEqual(g.call_args.kwargs["tools"], [{"google_search": {}}])
+        self.assertEqual([p["name"] for p in r["products"]], ["Trichoderma", "Anvil 5SC"])  # có trang bán thật, sinh học lên trước
+        tri, anvil = r["products"]
+        self.assertEqual((anvil["price_vnd"], anvil["image"], anvil["kind"]), (185000, "https://shop.vn/a.jpg", "hoa_hoc"))
+        self.assertEqual((tri["url"], tri["kind"]), ("https://kho.vn/tricho", "sinh_hoc"))  # link AI chết -> nguồn Google cùng cửa hàng
+        self.assertEqual(r["sources"], [{"title": "kho.vn", "url": "https://kho.vn/tricho"}]); self.assertEqual(r["note"], "Đọc nhãn.")
+    def test_products_api_and_cache(self):
+        self.authed(); did = self.predict().get_json()["diagnosis_id"]
+        self.run_sql("UPDATE diagnoses SET healthy=1")
+        self.assertEqual(self.c.get(f"/api/diagnoses/{did}/products").status_code, 400)  # cây khỏe: không gợi ý thuốc
+        self.mark_sick()
+        self.assertEqual(self.c.get(f"/api/diagnoses/{did}/products").status_code, 503)  # chưa có khóa Gemini
+        found = dict(products=[dict(name="Ridomil Gold", url=None)], sources=[], note="")
+        with mock.patch.object(ai_service, "gemini_available", return_value=True), mock.patch("shopping.find_products", return_value=found) as f:
+            r1 = self.c.get(f"/api/diagnoses/{did}/products").get_json()
+            r2 = self.c.get(f"/api/diagnoses/{did}/products").get_json()
+            self.assertEqual(f.call_count, 1)  # lần sau dùng kết quả đã lưu
+            self.assertEqual(f.call_args[0][:2], ("Bệnh mốc sương (sương mai)", "Cà chua"))
+            self.c.get(f"/api/diagnoses/{did}/products?refresh=1"); self.assertEqual(f.call_count, 2)
+        self.assertEqual(r1["products"][0]["name"], "Ridomil Gold"); self.assertIn("cached_at", r2)
+        self.as_user2(); self.assertEqual(self.c.get(f"/api/diagnoses/{did}/products").status_code, 404)
 
 class MultiPhotoTests(Base):
     """Một lượt tra cứu 1-3 ảnh: mỗi ảnh dự đoán riêng, gộp bằng trung bình xác suất."""
@@ -568,13 +646,14 @@ class AIScanTests(Base):
         with self.ai(return_value=ai_answer(plant_vi="Cà chua", plant_en="Tomato", disease_vi="Đốm vòng", disease_en="Early blight")):
             j = self.predict("auto").get_json()
             self.assertIsNotNone(ai_service.analyze_image.call_args, j)
-            self.assertEqual(ai_service.analyze_image.call_args.kwargs, {"model_plant": "Cà chua"})
+            kw = ai_service.analyze_image.call_args.kwargs
+            self.assertEqual(kw["model_plant"], "Cà chua")
         self.assertEqual(j["result"]["disease"], "Bệnh đốm vòng (mốc sương sớm)")
         p[m.class_names.index("Potato___Late_blight")] = 0.3  # khả năng thuộc nhiều cây khác nhau -> không gợi ý
         self.run_sql("DELETE FROM ai_samples")  # ảnh màu đơn sắc giống nhau: không để bộ nhớ ảnh trả lời thay AI
         with self.ai(return_value=ai_answer()):
             self.predict("auto", leaf((10, 200, 30)))
-            self.assertEqual(ai_service.analyze_image.call_args.kwargs, {})
+            self.assertNotIn("model_plant", ai_service.analyze_image.call_args.kwargs)
     def test_ai_low_confidence_not_saved(self):
         self.authed()
         with self.ai(return_value=ai_answer(confidence=0.4)):
@@ -1203,6 +1282,125 @@ class WeatherRuleTests(unittest.TestCase):
         self.assertEqual(weather.assess(fake_days(tmean=24, tmax=27, rh=70, rain=1.5), set()), [])
     def test_distance(self):
         self.assertAlmostEqual(weather.distance_km(21.03, 105.85, 10.78, 106.70), 1137, delta=15)  # Hà Nội - TP.HCM
+
+class ReviewTests(Base):
+    """Báo kết quả sai và duyệt nhãn mẫu AI trước khi huấn luyện lại."""
+    def ai(self, **kw):
+        return mock.patch.multiple(ai_service, vision_available=mock.Mock(return_value=True), analyze_image=mock.Mock(**kw))
+    def admin_session(self):
+        """Đăng nhập tài khoản quản trị (user2) trên client riêng, phiên của người dùng chính giữ nguyên."""
+        a = self.app.test_client()
+        a.post("/api/register", json={"username": "quantri", "email": "qt@b.vn", "password": "matkhau123", "phone": "0977777777"})
+        code = self.sql("select code from email_codes where email='qt@b.vn'")[0][0]
+        a.post("/api/verify", json={"email": "qt@b.vn", "code": code})
+        self.make_admin("quantri")
+        a.post("/api/login", json={"username": "quantri", "password": "matkhau123"})
+        return a
+    def test_report_and_accept_adds_reviewed_sample(self):
+        self.authed()
+        did = self.predict("tomato").get_json()["diagnosis_id"]  # DEMO: mô hình, chưa có mẫu AI
+        self.assertIsNone(self.c.get(f"/api/diagnoses/{did}/report").get_json())
+        self.assertEqual(self.c.post(f"/api/diagnoses/{did}/report", json={"class_name": "Không_có___lớp"}).status_code, 400)
+        self.assertEqual(self.c.post(f"/api/diagnoses/{did}/report", json={"note": "sai"}).status_code, 400)  # thiếu nhãn
+        r = self.c.post(f"/api/diagnoses/{did}/report", json={"class_name": "Tomato___Late_blight", "note": "cán bộ xem rồi"})
+        self.assertEqual(r.status_code, 200)
+        self.c.post(f"/api/diagnoses/{did}/report", json={"class_name": "Tomato___Early_blight"})  # báo lại: sửa báo cáo cũ
+        rep = self.c.get(f"/api/diagnoses/{did}/report").get_json()
+        self.assertEqual((rep["status"], rep["class_name"], rep["disease"]), ("open", "Tomato___Early_blight", "Bệnh đốm vòng (mốc sương sớm)"))
+        self.assertEqual(self.sql("select count(*) from reports"), [(1,)])
+        a = self.admin_session()
+        self.assertEqual(a.get("/api/admin/stats").get_json()["reports_open"], 1)
+        [item] = a.get("/api/admin/reports").get_json()
+        self.assertEqual((item["class_name"], item["kind"]), ("Tomato___Early_blight", "leaf"))
+        with mock.patch("push.send") as p:
+            self.assertEqual(a.post(f"/api/admin/reports/{item['id']}", json={"action": "accept", "answer": "Đúng là đốm vòng"}).get_json()["status"], "accepted")
+        d = self.c.get(f"/api/diagnoses/{did}").get_json()
+        self.assertEqual((d["raw"], d["disease"]), ("Tomato___Early_blight", "Bệnh đốm vòng (mốc sương sớm)"))
+        self.assertTrue(d["details"]["notes"][0].startswith("Quản trị viên đã sửa"))
+        self.assertEqual(self.sql("select class_name, status from ai_samples"), [("Tomato___Early_blight", "approved")])  # ảnh thực tế vào dữ liệu
+        self.assertEqual(self.dataset_files(), ["Tomato___Early_blight"])
+        self.assertIn("Quản trị viên đã sửa thành", self.sql("select content from notifications")[0][0])
+        self.assertEqual(p.call_args[0][2], [self.sql("select id from users where username='nguyenvan'")[0][0]])  # đẩy về điện thoại
+        self.assertEqual(self.c.get(f"/api/diagnoses/{did}/report").get_json()["status"], "accepted")
+        self.assertEqual(a.post(f"/api/admin/reports/{item['id']}", json={"action": "reject"}).status_code, 400)  # đã xử lý
+        self.as_user2(); self.assertEqual(self.c.post(f"/api/diagnoses/{did}/report", json={"disease": "x"}).status_code, 404)
+    def test_reject_free_text_report(self):
+        self.authed()
+        did = self.predict("tomato").get_json()["diagnosis_id"]
+        self.assertEqual(self.c.post(f"/api/diagnoses/{did}/report", json={"plant": "Lúa", "disease": "Đạo ôn"}).status_code, 200)
+        a = self.admin_session()
+        [item] = a.get("/api/admin/reports").get_json()
+        self.assertIsNone(item["class_name"])
+        self.assertEqual(a.post(f"/api/admin/reports/{item['id']}", json={"action": "accept"}).status_code, 400)  # tự ghi: phải chọn nhãn
+        a.post(f"/api/admin/reports/{item['id']}", json={"action": "reject", "answer": "Ảnh là lá cà chua"})
+        self.assertEqual(a.get("/api/admin/reports?status=done").get_json()[0]["status"], "rejected")
+        self.assertIn("giữ nguyên", self.sql("select content from notifications")[0][0])
+        self.assertEqual(self.sql("select count(*) from ai_samples"), [(0,)])
+    def test_ai_samples_wait_for_review_and_relabel(self):
+        self.authed()
+        with self.ai(return_value=ai_answer()):
+            did = self.predict("other").get_json()["diagnosis_id"]
+        self.assertEqual(self.sql("select status from ai_samples"), [("pending",)])
+        a = self.admin_session()
+        self.assertEqual(a.get("/api/admin/stats").get_json()["samples_pending"], 1)
+        [s] = a.get("/api/admin/samples").get_json()
+        self.assertEqual(a.get("/api/admin/samples?status=approved").get_json(), [])
+        self.assertEqual(a.post(f"/api/admin/samples/{s['id']}", json={"action": "relabel", "class_name": "Pest_khong_co"}).status_code, 400)
+        self.assertEqual(a.post(f"/api/admin/samples/{s['id']}", json={"action": "relabel", "class_name": "Tomato___Leaf_Mold"}).status_code, 200)
+        self.assertEqual(self.sql("select class_name, status from ai_samples"), [("Tomato___Leaf_Mold", "approved")])
+        self.assertEqual(self.dataset_files(), ["Tomato___Leaf_Mold"])  # ảnh chuyển sang thư mục lớp mới
+        self.assertEqual(self.sql("select count(*) from ai_classes"), [(0,)])  # lớp xoài không còn mẫu: quên lớp
+        self.assertEqual(self.c.get(f"/api/diagnoses/{did}").get_json()["disease"], "Bệnh mốc lá")
+        with self.ai(return_value=ai_answer()):
+            self.predict("other", leaf((200, 40, 40)))
+        ids = [x["id"] for x in a.get("/api/admin/samples").get_json()]
+        self.assertEqual(a.post("/api/admin/samples/approve", json={"ids": ids}).get_json()["approved"], 1)
+        out = os.path.join(self.tmp.name, "xuat")
+        r = self.app.test_cli_runner().invoke(args=["export-dataset", out])
+        self.assertIn("2 ảnh", r.output)
+        self.assertEqual(sorted(os.listdir(out)), [".xuat-tu-dataset-ai", "Mango___Anthracnose", "Tomato___Leaf_Mold"])
+        other = os.path.join(self.tmp.name, "khac"); os.makedirs(other); open(os.path.join(other, "a.txt"), "w").close()
+        self.assertNotEqual(self.app.test_cli_runner().invoke(args=["export-dataset", other]).exit_code, 0)  # không xóa thư mục lạ
+        self.assertTrue(os.path.exists(os.path.join(other, "a.txt")))
+
+class LibraryTests(Base):
+    def test_library_lists_diseases_and_pests(self):
+        self.authed()
+        j = self.c.get("/api/library").get_json()
+        self.assertTrue(any(d["class_name"] == "Tomato___Late_blight" and d["disease"] == "Bệnh mốc sương (sương mai)" for d in j["diseases"]))
+        self.assertFalse(any("healthy" in d["class_name"] for d in j["diseases"]))  # lá khỏe không phải bệnh
+        tomato = next(p for p in j["plants"] if p["id"] == "tomato")
+        self.assertEqual(tomato["healthy_class"], "Tomato___healthy")
+        self.assertEqual(len(j["pests"]), len(pests.PESTS))
+        self.assertTrue(any(p["beneficial"] for p in j["pests"]))
+        self.assertEqual(self.get_status("/api/library/image?c=Kh%C3%B4ng___c%C3%B3"), 404)
+        self.c.post("/api/logout"); self.assertEqual(self.c.get("/api/library").status_code, 401)
+
+class PushTests(Base):
+    def test_subscribe_and_push_on_notify(self):
+        self.authed()
+        self.assertTrue(self.c.get("/api/push/key").get_json()["key"])
+        self.assertEqual(self.c.post("/api/push/test").status_code, 400)  # chưa bật trên thiết bị nào
+        self.assertEqual(self.c.post("/api/push/subscribe", json={"endpoint": "http://x", "keys": {}}).status_code, 400)
+        sub = {"endpoint": "https://push.example.com/send/abc123", "keys": {"p256dh": "BKey", "auth": "auth1"}}
+        self.assertEqual(self.c.post("/api/push/subscribe", json=sub).status_code, 200)
+        self.c.post("/api/push/subscribe", json=sub)  # đăng ký lại cùng thiết bị: không trùng
+        self.assertEqual(self.sql("select count(*) from push_subs"), [(1,)])
+        sent = []
+        class Now:  # chạy việc gửi ngay trong luồng test
+            def submit(self, f, *a): f(*a)
+        resp = mock.Mock(status_code=410)
+        def fake(info, data, **kw):
+            sent.append((info["endpoint"], json.loads(data)))
+            raise pywebpush.WebPushException("gone", response=resp)
+        with mock.patch.object(push_mod, "_pool", Now()), mock.patch("pywebpush.webpush", side_effect=fake):
+            self.assertEqual(self.c.post("/api/push/test").status_code, 200)
+        self.assertEqual(sent[0][0], sub["endpoint"])
+        self.assertEqual(sent[0][1]["url"], "/notifications")
+        self.assertEqual(self.sql("select count(*) from push_subs"), [(0,)])  # dịch vụ đẩy báo đã hủy (410): xóa thiết bị
+        self.c.post("/api/push/subscribe", json=sub)
+        self.c.post("/api/push/unsubscribe", json={"endpoint": sub["endpoint"]})
+        self.assertEqual(self.sql("select count(*) from push_subs"), [(0,)])
 
 class CarePlanTests(Base):
     def plan(self, raw):

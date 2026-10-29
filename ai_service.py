@@ -124,15 +124,19 @@ def _cool(k, model, until, error):
         _cooldown[(k["id"], model)] = until
     _report(k, model, "quota" if error.startswith("Hết hạn mức") else "error", error, until)
 
-def _gemini(contents, system, schema=None, max_tokens=2048, timeout=30, fast=False):
+def _gemini(contents, system, schema=None, max_tokens=2048, timeout=30, fast=False, tools=None, meta=False):
     """Gọi Gemini generateContent; có schema thì yêu cầu trả JSON và trả về dict. fast=True: dùng chuỗi model nhanh.
+    tools: công cụ của Gemini (VD [{"google_search": {}}] để tìm trên web); meta=True: trả về (kết quả, groundingMetadata).
     Xoay vòng khóa: mỗi lần gọi bắt đầu từ khóa kế tiếp; khóa hết hạn mức (429) với một model thì thử khóa khác cùng model,
     mọi khóa đều hết mới xuống model kế tiếp. Khóa sai/bị chặn thì bỏ qua 1 giờ; model quá chậm thì bỏ qua 5 phút."""
     global _turn
     cfg = {"maxOutputTokens": max_tokens}  # model có "thinking" tính cả token suy nghĩ
     if schema:
         cfg.update(responseMimeType="application/json", responseSchema=schema)
-    body = json.dumps({"system_instruction": {"parts": [{"text": system}]}, "contents": contents, "generationConfig": cfg}).encode()
+    req_body = {"system_instruction": {"parts": [{"text": system}]}, "contents": contents, "generationConfig": cfg}
+    if tools:
+        req_body["tools"] = tools
+    body = json.dumps(req_body).encode()
     keys = _keys()
     if not keys:
         raise RuntimeError("Chưa có khóa Gemini nào đang bật")
@@ -174,7 +178,8 @@ def _gemini(contents, system, schema=None, max_tokens=2048, timeout=30, fast=Fal
                 err = e
                 continue
             _report(k, model, "ok")
-            return _parse(data, schema)
+            out = _parse(data, schema)
+            return (out, ((data.get("candidates") or [{}])[0]).get("groundingMetadata") or {}) if meta else out
     if not tried:
         raise AIQuotaExceeded("mọi khóa Gemini đang hết hạn mức")
     raise err
@@ -188,6 +193,10 @@ def _parse(data, schema):
     if not text or (schema and cand.get("finishReason") == "MAX_TOKENS"):
         raise ValueError(f"Gemini không trả lời đủ: {cand.get('finishReason') or data}")
     return json.loads(text) if schema else text
+
+def gemini_available():
+    """Có khóa Gemini đang bật (phân tích ảnh, chat, kiểm duyệt, tìm thuốc bằng Google Search, cửa hàng bằng Google Maps)."""
+    return bool(_keys())
 
 def _image_part(image_bytes):
     return {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(image_bytes).decode()}}

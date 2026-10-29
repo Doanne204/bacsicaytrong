@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowLeft, Camera, ImagePlus, Leaf, RotateCcw, Send, X } from "lucide-react";
@@ -83,7 +83,8 @@ export default function Chat() {
   const { id } = useParams();
   const diag = useQuery({ queryKey: ["diagnosis", id], queryFn: () => api<Diagnosis>(`/api/diagnoses/${id}`), enabled: !!id });
   const hist = useQuery({ queryKey: ["chat", id || "general"], queryFn: () => api<ChatMsg[]>("/api/chat" + (id ? `?diagnosis_id=${id}` : "")) });
-  const [msgs, setMsgs] = useState<Msg[]>([]), [text, setText] = useState(""), [busy, setBusy] = useState(false);
+  const [params] = useSearchParams();  // ?q=: câu hỏi soạn sẵn (VD từ Thư viện sâu bệnh), người dùng bấm gửi
+  const [msgs, setMsgs] = useState<Msg[]>([]), [text, setText] = useState(params.get("q")?.slice(0, 1000) || ""), [busy, setBusy] = useState(false);
   const [img, setImg] = useState<File | null>(null), [imgUrl, setImgUrl] = useState(""), [dragging, setDragging] = useState(false);
   const [pendingImage, setPendingImage] = useState(false);
   const toBottom = () => log.current?.scrollTo({ top: log.current.scrollHeight });

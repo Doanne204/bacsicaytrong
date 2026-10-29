@@ -1,6 +1,7 @@
 flask>=3.0
 python-dotenv
 cryptography
+pywebpush>=2.0
 psycopg2-binary>=2.9.10
 pillow
 numpy

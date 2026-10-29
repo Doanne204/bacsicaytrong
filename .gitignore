@@ -9,6 +9,7 @@ yolo/runs/
 .env
 instance/
 dataset_ai/
+dataset_ai_duyet/
 certs/
 results/
 __pycache__/

@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlarmClock, Camera, CheckCircle2, ChevronRight, Clock, CloudSun, ImagePlus, Info, Leaf, MessageCircle, NotebookPen, PenSquare, ShieldAlert, Star } from "lucide-react";
+import { AlarmClock, BookOpen, Camera, CheckCircle2, ChevronRight, Clock, CloudSun, ImagePlus, Info, Leaf, MessageCircle, NotebookPen, PenSquare, ShieldAlert, Star } from "lucide-react";
 import { toast } from "sonner";
 import { api, send, type DueReminder, type HistoryItem, type WeatherReport } from "@/shared/lib/api";
 import { ago, cn, dayKey, ddmm, liveCamera, pct, pickFile, toDate } from "@/shared/lib/utils";
@@ -65,7 +65,7 @@ export default function Home({ mine = false }: { mine?: boolean }) {
             <h2 className="mb-2 font-bold">Lối tắt</h2>
             <ul className="overflow-hidden rounded-2xl border bg-card">
               {([["/journal", NotebookPen, "Nhật ký điều trị", "Lịch phun, kiểm tra cây"], ["/weather", CloudSun, "Thời tiết, cảnh báo", "Dự báo 7 ngày cho vườn"],
-                ["/chat", MessageCircle, "Hỏi trợ lý AI", "Hỏi về sâu bệnh, thuốc"], ["/history", Clock, "Lịch sử tra cứu", "Các lần chụp trước"],
+                ["/chat", MessageCircle, "Hỏi trợ lý AI", "Hỏi về sâu bệnh, thuốc"], ["/library", BookOpen, "Thư viện sâu bệnh", "Bệnh lá, sâu hại, cách phòng trừ"], ["/history", Clock, "Lịch sử tra cứu", "Các lần chụp trước"],
                 ["/ratings", Star, "Đánh giá của tôi", "Kết quả bạn đã chấm"]] as const).map(([to, Icon, l, sub]) => (
                 <li key={to} className="border-b last:border-0">
                   <Link to={to} className="flex items-center gap-3 px-4 py-3 transition hover:bg-secondary/60">

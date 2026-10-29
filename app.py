@@ -68,6 +68,12 @@ def create_app(test_config=None):
     def favicon():
         return send_from_directory(os.path.join(ROOT, "shared", "img"), "favicon.ico")
 
+    @app.get("/sw.js")  # service worker (frontend/public/sw.js) phải nằm ở gốc trang mới điều khiển được mọi đường dẫn
+    def service_worker():
+        resp = send_from_directory(DIST_DIR, "sw.js", max_age=0)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     @app.get("/assets/<path:name>")  # JS/CSS do Vite build, tên file có mã băm nên cache được lâu
     def assets(name):
         return send_from_directory(os.path.join(DIST_DIR, "assets"), name, max_age=31536000)
@@ -100,6 +106,31 @@ def create_app(test_config=None):
             click.echo(f"Đã gửi {n} nhắc việc")
             if not no_weather:
                 click.echo(f"Đã gửi {weather_notify(c)} cảnh báo thời tiết")
+
+    @app.cli.command("export-dataset")
+    @click.argument("out_dir", default="dataset_ai_duyet")
+    def export_dataset(out_dir):
+        """Chép các mẫu AI đã được quản trị viên duyệt sang out_dir/<lớp>/ để huấn luyện lại (mẫu chờ duyệt không chép):
+        flask --app app export-dataset dataset_ai_duyet, rồi python train.py --data ... --extra dataset_ai_duyet"""
+        import shutil
+        root = app.config["AI_DATASET_DIR"]
+        mark = os.path.join(out_dir, ".xuat-tu-dataset-ai")
+        if os.path.isdir(out_dir) and os.listdir(out_dir) and not os.path.exists(mark):
+            raise click.ClickException(f"{out_dir} đã có dữ liệu khác, hãy chọn thư mục mới")
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir)  # xuất lại từ đầu (chỉ thư mục do lệnh này tạo): mẫu đã bị xóa / đổi nhãn không còn sót
+        os.makedirs(out_dir)
+        open(mark, "w").close()
+        with closing(connect(app.config["DATABASE"])) as c:
+            rows = c.execute("SELECT class_name, path FROM ai_samples WHERE status='approved'").fetchall()
+        n = 0
+        for r in rows:
+            src = os.path.join(root, r["path"])
+            if os.path.exists(src):
+                os.makedirs(os.path.join(out_dir, r["class_name"]), exist_ok=True)
+                shutil.copy2(src, os.path.join(out_dir, r["class_name"], os.path.basename(src)))
+                n += 1
+        click.echo(f"Đã chép {n} ảnh đã duyệt ({len({r['class_name'] for r in rows})} lớp) vào {out_dir}")
 
     @app.cli.command("import-sqlite")
     @click.argument("sqlite_path", default=os.path.join("instance", "app.db"))

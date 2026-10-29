@@ -1,5 +1,8 @@
-import { Bell, Clock, CloudSun, Home, MessageCircle, NotebookPen, PanelLeftClose, PanelLeftOpen, PenSquare, ScanLine, Shield, Star, User } from "lucide-react";
+import { Bell, BookOpen, Clock, CloudSun, Home, Map as MapIcon, MessageCircle, NotebookPen, PanelLeftClose, PanelLeftOpen, PenSquare, ScanLine, Shield, Star, User } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CloudOff } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { resyncPush } from "@/shared/lib/pwa";
 import { useMe } from "@/shared/hooks/use-me";
 import { useSidebar } from "@/shared/hooks/use-sidebar";
 import { Brand, Logo } from "@/shared/components/brand";
@@ -17,6 +20,8 @@ const TABS = [
 ];
 const EXTRA = [
   { to: "/weather", label: "Cảnh báo thời tiết", icon: CloudSun, match: ["/weather"] },
+  { to: "/map", label: "Bản đồ sâu bệnh", icon: MapIcon, match: ["/map"] },
+  { to: "/library", label: "Thư viện sâu bệnh", icon: BookOpen, match: ["/library"] },
   { to: "/chat", label: "Hỏi trợ lý AI", icon: MessageCircle, match: ["/chat"] },
   { to: "/post", label: "Đăng bài", icon: PenSquare, match: ["/post"] },
   { to: "/ratings", label: "Đánh giá", icon: Star, match: ["/ratings"] },
@@ -26,6 +31,8 @@ const EXTRA = [
 export function Shell() {
   const { me } = useMe();
   const { collapsed, toggle } = useSidebar();
+  const online = useOnline();
+  useEffect(() => { if (me) resyncPush(); }, [me?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   const loc = useLocation();
   const active = (m: string[]) => m.some((p) => loc.pathname === p || loc.pathname.startsWith(p.endsWith("/") ? p : p + "/"));
   const chat = loc.pathname.startsWith("/chat"), post = /^\/p\//.test(loc.pathname);
@@ -78,6 +85,11 @@ export function Shell() {
         <NavLink to="/profile" aria-label="Hồ sơ"><Avatar name={me?.username} size="sm" /></NavLink>
       </header>
 
+      {!online && (
+        <div role="status" className="sticky top-14 z-20 flex items-center justify-center gap-2 bg-warning/15 px-3 py-1.5 text-center text-xs font-semibold lg:top-0">
+          <CloudOff className="h-4 w-4 shrink-0" />Đang ngoại tuyến: bạn xem được dữ liệu đã mở trước đó; tra cứu ảnh và gửi bài cần có mạng.
+        </div>
+      )}
       <main className={cn("mx-auto w-full", chat ? "max-w-none" : "max-w-[1480px] px-4 py-5 md:px-8 md:py-8 xl:px-10", !hideTabbar && "pb-[calc(5.5rem+var(--safe-b))] lg:pb-10")}>
         <Outlet />
       </main>
@@ -100,4 +112,15 @@ export function Shell() {
       )}
     </div>
   );
+}
+
+/** Trình duyệt có đang kết nối mạng không (cập nhật khi mất / có mạng lại). */
+function useOnline() {
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true), off = () => setOnline(false);
+    window.addEventListener("online", on); window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+  return online;
 }

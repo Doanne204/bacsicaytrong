@@ -8,6 +8,7 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Field } from "@/shared/ui/misc";
 import { AuthLayout } from "./AuthLayout";
+import { GoogleSignIn } from "../components/google-signin";
 
 type F = { username: string; phone: string; email: string; password: string; password2: string };
 const check: Record<keyof F, (v: string, f: F) => string> = {
@@ -56,6 +57,7 @@ export default function Register() {
         {pw("password2", "Nhập lại mật khẩu", "new-password")}
         <Button type="submit" size="lg" className="w-full" loading={busy}>Tạo tài khoản</Button>
       </form>
+      <GoogleSignIn mode="signup" below />
       <p className="mt-6 text-center text-sm text-muted-foreground">Đã có tài khoản? <Link to="/login" className="font-semibold text-primary hover:underline">Đăng nhập</Link></p>
     </AuthLayout>
   );

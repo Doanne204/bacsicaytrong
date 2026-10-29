@@ -33,7 +33,7 @@ export default function App() {
           <Route path="/comments" element={<Comments onChange={() => stats.refetch()} />} />
           <Route path="/users" element={<Users />} />
           <Route path="/ratings" element={<Ratings />} />
-          <Route path="/data" element={<Data stats={stats.data} />} />
+          <Route path="/data" element={<Data stats={stats.data} onChange={() => stats.refetch()} />} />
           <Route path="/keys" element={<Keys />} />
           <Route path="/stats" element={<Stats />} />
           <Route path="/models" element={<Models />} />

@@ -18,7 +18,7 @@ export const NAV = [
   { to: "/ratings", label: "Đánh giá", icon: Star, desc: "Đánh giá của người dùng về kết quả tra cứu." },
   { to: "/stats", label: "Thống kê", icon: BarChart3, desc: "Tra cứu theo tháng, bệnh theo mùa, độ chính xác suy từ đánh giá, lượt AI." },
   { to: "/models", label: "Đánh giá mô hình", icon: Cpu, desc: "Ma trận nhầm lẫn, precision/recall/F1 từng lớp của hai mô hình." },
-  { to: "/data", label: "Dữ liệu AI", icon: Database, desc: "Ảnh AI đã gán nhãn, dùng để huấn luyện lại mô hình." },
+  { to: "/data", label: "Dữ liệu AI", icon: Database, desc: "Duyệt nhãn ảnh AI và báo kết quả sai trước khi huấn luyện lại mô hình.", count: (s: Stats) => s.samples_pending + s.reports_open },
   { to: "/keys", label: "Khóa Gemini", icon: KeyRound, desc: "Thêm nhiều khóa API, xoay vòng khi một khóa hết lượt." },
 ];
 

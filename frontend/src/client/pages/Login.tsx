@@ -7,6 +7,7 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Field } from "@/shared/ui/misc";
 import { AuthLayout } from "./AuthLayout";
+import { GoogleSignIn } from "../components/google-signin";
 
 export default function Login() {
   const nav = useNavigate();
@@ -33,6 +34,7 @@ export default function Login() {
   };
   return (
     <AuthLayout title="Đăng nhập" text="Dùng tên đăng nhập, email hoặc số điện thoại.">
+      <GoogleSignIn mode="signin" next={(loc.state as { from?: string })?.from || "/home"} />
       <form onSubmit={submit} noValidate className="space-y-4">
         {err.form && <p role="alert" className="rounded-xl bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive">{err.form}</p>}
         <Field label="Tài khoản" htmlFor="u" error={err.u}><Input id="u" autoComplete="username" value={u} onChange={(e) => setU(e.target.value)} aria-invalid={!!err.u} autoFocus /></Field>
