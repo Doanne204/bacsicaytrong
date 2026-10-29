@@ -7,7 +7,7 @@ sys.path.insert(0, ROOT)
 for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "SMTP_HOST", "SMTP_USER", "SMTP_PASS", "MAIL_FROM", "APP_URL", "GOOGLE_CLIENT_ID"):
     os.environ[k] = ""
 os.environ["MODEL_PATH"] = os.path.join(ROOT, "khong_co_mo_hinh.keras")  # test chạy ở chế độ DEMO, không nạp TensorFlow
-os.environ["PEST_MODEL_PATH"] = os.path.join(ROOT, "khong_co_mo_hinh_sau.keras")  # mô hình sâu hại thay bằng FakePests
+os.environ["PEST_MODEL_PATH"] = os.path.join(ROOT, "khong_co_mo_hinh_sau.onnx")  # mô hình sâu hại thay bằng FakePests
 os.environ["VAPID_KEY_FILE"] = os.path.join(tempfile.mkdtemp(), "vapid.pem")  # không ghi khóa thông báo đẩy vào instance/ thật
 import numpy as np
 from PIL import Image
@@ -120,6 +120,30 @@ class ModelFilesTests(unittest.TestCase):
         ids = [knowledge.info(c)["plant_id"] for c in names]
         self.assertNotIn("?", ids)
         self.assertTrue(set(knowledge.PLANTS) <= set(ids))
+
+class PestModelTests(unittest.TestCase):
+    """Mô hình sâu hại YOLO11m-cls chạy bằng onnxruntime (models/pest_model.onnx do yolo/export_pest.py xuất)."""
+    def test_preprocess_like_ultralytics(self):
+        from model_service import pest_preprocess
+        b = io.BytesIO(); im = Image.new("RGB", (448, 300), (255, 0, 0)); im.paste((0, 0, 255), (0, 0, 40, 300)); im.save(b, "PNG")
+        x = pest_preprocess(b.getvalue())
+        self.assertEqual((x.shape, x.dtype), ((3, 224, 224), np.float32))
+        self.assertAlmostEqual(float(x[0].mean()), 1.0, places=2)  # cạnh ngắn về 224 rồi cắt giữa: dải xanh bên trái bị cắt bỏ
+        self.assertEqual(float(x[2].max()), 0.0)
+    path = os.path.join(ROOT, "models", "pest_model.onnx")
+    @unittest.skipUnless(os.path.exists(path), "chưa có models/pest_model.onnx")
+    def test_real_model_predicts(self):
+        import model_service
+        with mock.patch.object(model_service, "PEST_MODEL_PATH", self.path):
+            svc = model_service.PestService()
+        self.assertTrue(svc.available)
+        self.assertEqual(len(svc.class_names), 204)
+        self.assertIsNotNone(svc.centroids)  # tâm vector khớp đúng file mô hình
+        b = io.BytesIO(); Image.new("RGB", (300, 300), (40, 160, 60)).save(b, "JPEG")
+        top, fam = svc.predict(b.getvalue())
+        self.assertEqual(len(top), 3)
+        self.assertAlmostEqual(sum(t["prob"] for t in svc.predict(b.getvalue(), top_k=204)[0]), 1.0, places=3)
+        self.assertLess(fam, 0.9)  # ảnh màu trơn không giống loài nào
 
 class EmailTemplateTests(unittest.TestCase):
     def test_code_and_list_mails(self):
@@ -395,12 +419,16 @@ class PestTests(Base):
         r = self.predict("pest").get_json()
         self.assertEqual((r["result"]["plant_id"], r["result"]["disease"]), ("unknown", "Chưa xác định được loài"))
         self.assertEqual(r["top"][0]["disease"], "Rầy nâu")  # vẫn giữ để tham khảo
-        self.app.pests = FakePests([("Nilaparvata lugens", 0.35)])  # độ tin cậy dưới PEST_MIN_PROB
-        self.assertEqual(self.predict("pest").get_json()["result"]["plant_id"], "unknown")
-        self.app.pests = FakePests([("Nilaparvata lugens", 0.55)])  # đủ để kết luận khi đã chọn "Sâu hại", kèm cảnh báo
+        self.app.pests = FakePests([("Nilaparvata lugens", 0.55)])  # độ tin cậy dưới PEST_MIN_PROB (0.70)
         r = self.predict("pest").get_json()
-        self.assertEqual(r["result"]["disease"], "Rầy nâu"); self.assertIn("Độ tin cậy thấp", " ".join(r["notes"]))
-        with mock.patch.object(self.app.model, "familiarity", return_value=0.3):  # Tự nhận diện chặt hơn: 0.55 chưa đủ
+        self.assertEqual(r["result"]["plant_id"], "unknown"); self.assertIn("Độ tin cậy thấp", " ".join(r["notes"]))
+        self.app.pests = FakePests([("Nilaparvata lugens", 0.75)])  # đủ để kết luận khi đã chọn "Sâu hại"
+        self.assertEqual(self.predict("pest").get_json()["result"]["disease"], "Rầy nâu")
+        with mock.patch.object(self.app.model, "familiarity", return_value=0.3):  # Tự nhận diện chặt hơn: 0.75 chưa đủ
+            self.assertNotEqual(self.predict("auto").get_json()["result"]["plant_id"], "pest")
+        self.app.pests = FakePests(self.BPH, fam=0.55)  # đủ quen khi đã chọn "Sâu hại", chưa đủ để Tự nhận diện chuyển sang sâu hại
+        self.assertEqual(self.predict("pest").get_json()["result"]["disease"], "Rầy nâu")
+        with mock.patch.object(self.app.model, "familiarity", return_value=0.3):
             self.assertNotEqual(self.predict("auto").get_json()["result"]["plant_id"], "pest")
     def test_auto_switches_to_pest_when_not_a_known_leaf(self):
         self.app.pests = FakePests(self.BPH)

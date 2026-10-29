@@ -27,7 +27,8 @@ for name in sys.argv[1:]:
         sys.path.insert(0, ROOT)
         import numpy as np, tensorflow as tf
         from model_service import load_image
-        model = tf.keras.models.load_model(os.path.join(ROOT, "models", "pest_model.keras"))
+        # mô hình MobileNetV3Large cũ: đã thay bằng YOLO11m-cls, bản sao lưu mới nhất nằm trong backups/
+        model = tf.keras.models.load_model(sorted(glob.glob(os.path.join(ROOT, "backups", "pest_before_*", "pest_model.keras")))[-1])
         bench(name, lambda f: model(np.expand_dims(np.asarray(load_image(open(f, "rb").read()), dtype="float32"), 0), training=False))
     else:
         import torch

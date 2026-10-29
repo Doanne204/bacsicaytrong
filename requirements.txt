@@ -6,5 +6,6 @@ psycopg2-binary>=2.9.10
 pillow
 numpy
 tensorflow>=2.15
+onnxruntime>=1.18
 scikit-learn
 waitress>=3.0

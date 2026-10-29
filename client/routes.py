@@ -25,13 +25,18 @@ MEMORY_HINT = 0.80
 # 99% >= 0.66; ảnh cây chưa có trong mô hình (lúa, sầu riêng, đậu phộng... AI đã học) trung vị 0.39, cao nhất 0.68;
 # côn trùng INSECT204 trung vị 0.39 -> dưới 0.65 coi là cây lạ, nhờ AI. (Mô hình bản 1 dùng 0.70.)
 FAMILIAR_MIN = 0.65
-# Tương tự cho mô hình sâu hại (tâm 204 loài INSECT204). Đo lại với mô hình bản 2 (tinh chỉnh toàn bộ, 28/10/2026) trên 600 ảnh
-# test sâu hại / 600 ảnh lá PlantVillage: 92% ảnh sâu hại qua ngưỡng 0.50; ở chế độ Tự nhận diện chỉ 0,2% ảnh lá bị chuyển sang
-# sâu hại (còn cần độ tin cậy >= LOW_CONF), ảnh sâu hại được chuyển thì đúng loài 96%.
+# Mô hình sâu hại YOLO11m-cls (tâm 204 loài INSECT204), đo 29/10/2026 bằng yolo/export_pest.py và trên 3.000 ảnh test sâu hại,
+# 1.500 ảnh lá PlantVillage, 30 ảnh lá thật người dùng gửi (dataset_ai). YOLO tự tin hơn MobileNetV3 cũ, kể cả với ảnh lá, nên
+# chế độ Tự nhận diện dùng ngưỡng riêng, chặt hơn (không chuyển thì app vẫn nhờ AI phân tích, chuyển nhầm lá thành sâu thì tệ hơn).
+# Người dùng chọn "Sâu hại": ảnh có độ giống tâm loài gần nhất < 0.50 coi là không có côn trùng / loài chưa học (94% ảnh sâu hại test
+# qua ngưỡng); kết luận khi độ tin cậy >= 0.70 (31.312 ảnh test: kết luận được 79% số ảnh, đúng 88%; MobileNetV3 cũ ở ngưỡng 0.4:
+# 66% số ảnh, đúng 87%).
 PEST_FAMILIAR_MIN = 0.50
-# Người dùng chọn "Sâu hại": kết luận khi độ tin cậy >= 0.4 (31.312 ảnh test: kết luận được 66% số ảnh, đúng 87%; >= 0.8 đúng 97%).
-# Bản 2 học với label smoothing nên độ tin cậy thấp hơn bản 1 (bản 1 ở ngưỡng 0.5: 72% số ảnh, đúng 82%).
-PEST_MIN_PROB = 0.40
+PEST_MIN_PROB = 0.70
+# Tự nhận diện (mô hình bệnh lá thấy ảnh lạ): chỉ chuyển sang sâu hại khi độ giống >= 0.60 và độ tin cậy >= 0.90: 56% ảnh sâu hại
+# được chuyển, đúng loài 94%; ảnh lá thật 0/30, ảnh lá PlantVillage 4% (ảnh lá quen thì mô hình bệnh lá đã xử lý, không tới bước này).
+PEST_AUTO_FAMILIAR = 0.60
+PEST_AUTO_MIN_PROB = 0.90
 USER_RE = r"[A-Za-z0-9_.]{3,30}"
 EMAIL_RE = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 PHONE_RE = r"0[35789]\d{8}"  # di động Việt Nam: 10 số, đầu 03/05/07/08/09
@@ -416,13 +421,13 @@ def model_result(datas, plant_id):
     return dict(result=best, top=top, source="model", notes=extra + notes, uncertain=bool(notes) or differ, plant_guess=plant_guess,
                 unsure=not_leaf or strange or best["prob"] < LOW_CONF), good[0]["emb"], per
 
-def pest_result(datas, min_prob=PEST_MIN_PROB):
+def pest_result(datas, min_prob=PEST_MIN_PROB, familiar_min=PEST_FAMILIAR_MIN):
     """Kết quả mô hình sâu hại cho 1-3 ảnh (gộp như model_result). Ảnh khác xa các loài đã học hoặc độ tin cậy dưới min_prob ->
     "chưa xác định", các loài gần nhất chỉ để tham khảo."""
     per = []
     for data in datas:
         t, f = current_app.pests.predict(data, top_k=ALL)
-        per.append(dict(top=t, fam=f, strange=f is not None and f < PEST_FAMILIAR_MIN))
+        per.append(dict(top=t, fam=f, strange=f is not None and f < familiar_min))
     good = [p for p in per if not p["strange"]] or per
     top = fuse([p["top"] for p in good])[:3]
     fam = max((p["fam"] for p in good if p["fam"] is not None), default=None)
@@ -551,7 +556,7 @@ def predict():
     if len(files) > MAX_PHOTOS:
         return err(f"Mỗi lần tra cứu tối đa {MAX_PHOTOS} ảnh")
     if plant_id == "pest" and not current_app.pests.available:
-        return err("Chưa có mô hình nhận diện sâu hại (models/pest_model.keras), hãy chạy train_pests.py", 503)
+        return err("Chưa có mô hình nhận diện sâu hại (models/pest_model.onnx), hãy chạy yolo/export_pest.py", 503)
     # Ảnh chính tên ngẫu nhiên; ảnh thêm đặt theo tên ảnh chính (<tên>-p2.jpg, -p3.jpg) để cùng quyền xem, cùng bị xóa
     names, datas = [], []
     for i, f in enumerate(files):
@@ -577,7 +582,7 @@ def predict():
         need_ai = res.pop("uncertain")
         # Tự nhận diện: ảnh không giống lá bệnh đã học -> thử mô hình sâu hại trước khi nhờ AI
         if plant_id == "auto" and res["unsure"] and current_app.pests.available:
-            pres = pest_result(datas, LOW_CONF)
+            pres = pest_result(datas, PEST_AUTO_MIN_PROB, PEST_AUTO_FAMILIAR)
             if not pres.pop("unsure"):
                 res, need_ai = pres, False
                 res["notes"].insert(0, "Ảnh giống côn trùng, sâu hại hơn lá bệnh nên hệ thống dùng mô hình nhận diện sâu hại.")

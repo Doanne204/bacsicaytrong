@@ -30,7 +30,7 @@ export default function Diagnosis() {
   const notPlant = d.plant_id === "background", unknown = d.plant_id === "unknown", pest = det.kind === "pest";
   const state = unknown ? ["Chưa xác định", "warning"] : notPlant ? ["Không nhận ra", "warning"] : pest ? (d.healthy ? ["Thiên địch có ích", "success"] : ["Sâu hại", "destructive"]) : d.healthy ? ["Khỏe mạnh", "success"] : ["Có dấu hiệu bệnh", "destructive"];
   const others = (det.top || []).filter((t) => t.raw !== d.raw);
-  const modelName = pest ? "mô hình nhận diện sâu hại (INSECT204)" : "mô hình MobileNetV3";
+  const modelName = pest ? "mô hình nhận diện sâu hại YOLO11m (INSECT204)" : "mô hình MobileNetV3";
   const source = d.source === "ai" ? ["Phân tích bởi AI Gemini", Sparkles] : d.source === "memory" ? ["Nhận ra từ dữ liệu hệ thống đã học", Database] : [unknown ? `Chưa nhận ra bằng ${modelName}` : `Nhận diện bởi ${modelName}`, pest ? Bug : Leaf];
   const SIcon = source[1] as React.ComponentType<{ className?: string }>;
   const retryMain = !pest && d.source === "model" && !!d.image_url && (unknown || !!det.ai_failed || (det.notes || []).some((n) => n.startsWith("Chưa gọi được AI")));

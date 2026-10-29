@@ -1,6 +1,8 @@
-"""Huấn luyện YOLO11-cls (Ultralytics) trên INSECT204 với đúng phép chia của train_pests.py rồi đánh giá trên cùng 31.312 ảnh test,
-cùng các chỉ số như results/pest_metrics.json để so với MobileNetV3Large. Chạy bằng môi trường riêng .venv-yolo (PyTorch + CUDA):
-    .venv-yolo\\Scripts\\python.exe yolo\\train_yolo.py --model yolo11s-cls --epochs 30
+"""Huấn luyện mô hình sâu hại chính của app: YOLO11m-cls (Ultralytics) trên INSECT204 với đúng phép chia của train_pests.py, rồi đánh
+giá trên cùng 31.312 ảnh test (so 3 cỡ ngày 28/10/2026: yolo11n-cls 73,2%, yolo11s-cls 75,5%, yolo11m-cls 76,3%; MobileNetV3Large 71,0%).
+Chạy bằng môi trường riêng .venv-yolo (PyTorch + CUDA), xong thì đưa vào app bằng yolo/export_pest.py:
+    .venv-yolo\\Scripts\\python.exe yolo\\train_yolo.py --epochs 30
+    .venv-yolo\\Scripts\\python.exe yolo\\export_pest.py
 Trọng số khởi đầu (ImageNet) lấy ở thư mục Models đi kèm bộ dữ liệu. Kết quả: results/yolo/<model>/metrics.json, mô hình
 yolo/runs/<model>/weights/best.pt."""
 import argparse, json, os, sys, time
@@ -44,11 +46,11 @@ def evaluate(weights, data, imgsz):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--model", default="yolo11s-cls")
+    p.add_argument("--model", default="yolo11m-cls")
     p.add_argument("--weights_dir", default=os.path.join(ROOT, "dataset", "INSECT204-A Novel Large-Scale Benchmark Dataset fo", "Models"))
     p.add_argument("--data", default=os.path.join(ROOT, "yolo", "insect204"))
     p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--batch", type=int, default=128)
+    p.add_argument("--batch", type=int, default=64, help="yolo11m-cls trên RTX 3060 12 GB: 64")
     p.add_argument("--imgsz", type=int, default=224)
     p.add_argument("--lr0", type=float, default=0.001)
     p.add_argument("--patience", type=int, default=6)

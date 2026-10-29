@@ -131,7 +131,7 @@ export default function Landing() {
           </div>
         </div>
       </section>
-      <footer className="border-t py-6 text-center text-sm text-muted-foreground">Bác sĩ cây trồng · Đề tài khóa luận: phát hiện sâu bệnh cây trồng · PlantVillage, INSECT204, MobileNetV3, Gemini</footer>
+      <footer className="border-t py-6 text-center text-sm text-muted-foreground">Bác sĩ cây trồng · Đề tài khóa luận: phát hiện sâu bệnh cây trồng · PlantVillage, INSECT204, MobileNetV3, YOLO11, Gemini</footer>
     </div>
   );
 }

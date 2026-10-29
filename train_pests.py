@@ -1,4 +1,8 @@
-"""Huấn luyện mô hình nhận diện sâu hại trên INSECT204 (204 loài côn trùng, ốc, nhện hại và thiên địch), cùng kiến trúc MobileNetV3Large
+"""MÔ HÌNH CŨ, CHỈ ĐỂ SO SÁNH: app dùng YOLO11m-cls làm mô hình sâu hại (yolo/train_yolo.py rồi yolo/export_pest.py), đúng 76,3% so với
+71,0% của bản MobileNetV3Large này trên cùng tập test. Script này mặc định ghi vào models/candidate_pest, results/candidate_pest để không đè
+mô hình app đang dùng. Phép chia train/val/test 6:1:3 (seed cố định) giống hệt results/pest_split.csv mà yolo/make_yolo_dataset.py dùng.
+
+Huấn luyện mô hình nhận diện sâu hại trên INSECT204 (204 loài côn trùng, ốc, nhện hại và thiên địch), cùng kiến trúc MobileNetV3Large
 với mô hình bệnh lá để app chạy chung TensorFlow.
 Bước 1 (chạy được trên CPU): trích vector đặc trưng 960 chiều bằng MobileNetV3Large học sẵn trên ImageNet (đóng băng, lưu cache để chạy
         lại nhanh), rồi học lớp phân loại trên các vector. Kết quả ghép thành một mô hình nhận ảnh 224x224 giá trị 0-255 như mô hình bệnh lá.
@@ -6,7 +10,7 @@ Bước 2 (tùy chọn): --finetune_epochs N tinh chỉnh MobileNetV3 trên ản
         toàn bộ backbone (--unfreeze -1, mặc định) hoặc N lớp cuối; LR khởi động 1 epoch rồi giảm cosine (--finetune_lr), AdamW,
         label smoothing 0.1, dừng sớm theo val_accuracy và lấy epoch tốt nhất. CPU i5-14600KF: khoảng 9-10 phút/epoch.
 Chạy: python train_pests.py --data "dataset/INSECT204-A Novel Large-Scale Benchmark Dataset fo/INSECT204"
-      thêm --finetune_epochs 12 --models_dir models/candidate --results_dir results/candidate để huấn luyện bản mới mà không đè bản đang dùng
+      thêm --finetune_epochs 12 để tinh chỉnh
 Ra:   <models_dir>/pest_model.keras, pest_class_names.json, pest_centroids.npz (nhận ra ảnh không phải sâu hại),
       <results_dir>/pest_split.csv (ảnh thuộc train/val/test), pest_metrics.json
 """
@@ -26,8 +30,8 @@ parser.add_argument("--patience", type=int, default=3)
 parser.add_argument("--batch", type=int, default=64)
 parser.add_argument("--limit_per_class", type=int, default=0, help="Chỉ lấy tối đa N ảnh mỗi lớp (chạy thử nhanh)")
 parser.add_argument("--cache", default=os.path.join("results", "pest_cache"), help="Thư mục lưu vector đặc trưng đã trích")
-parser.add_argument("--models_dir", default="models")
-parser.add_argument("--results_dir", default="results")
+parser.add_argument("--models_dir", default=os.path.join("models", "candidate_pest"))
+parser.add_argument("--results_dir", default=os.path.join("results", "candidate_pest"))
 args = parser.parse_args()
 
 import tensorflow as tf

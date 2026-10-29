@@ -11,8 +11,9 @@ MODEL_PATHS = [os.getenv("MODEL_PATH")] if os.getenv("MODEL_PATH") else [
     os.path.join(MODELS_DIR, "plant_model.keras"), os.path.join(MODELS_DIR, "best_plant_model.keras")]
 CLASSES_PATH = os.getenv("CLASSES_PATH", os.path.join(MODELS_DIR, "class_names.json"))
 CENTROIDS_PATH = os.getenv("CENTROIDS_PATH", os.path.join(MODELS_DIR, "class_centroids.npz"))
-# Mô hình sâu hại (train_pests.py, INSECT204): chưa có file thì app ẩn lựa chọn "Sâu hại"
-PEST_MODEL_PATH = os.getenv("PEST_MODEL_PATH", os.path.join(MODELS_DIR, "pest_model.keras"))
+# Mô hình sâu hại YOLO11m-cls (INSECT204; yolo/train_yolo.py huấn luyện, yolo/export_pest.py xuất ONNX): chưa có file thì app ẩn lựa
+# chọn "Sâu hại"
+PEST_MODEL_PATH = os.getenv("PEST_MODEL_PATH", os.path.join(MODELS_DIR, "pest_model.onnx"))
 PEST_CLASSES_PATH = os.path.join(MODELS_DIR, "pest_class_names.json")
 PEST_CENTROIDS_PATH = os.path.join(MODELS_DIR, "pest_centroids.npz")
 IMG_SIZE = 224
@@ -24,6 +25,22 @@ def _unit(v):
 def load_image(image_bytes):
     """Ảnh PIL RGB 224x224 đưa vào mô hình; dùng chung lúc huấn luyện (train_pests.py) và lúc chạy để xử lý ảnh giống hệt nhau."""
     return ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB").resize((IMG_SIZE, IMG_SIZE))
+
+def pest_preprocess(image, exif=True):
+    """Ảnh -> mảng 3x224x224 (RGB, 0-1) cho mô hình sâu hại YOLO11-cls, đúng như Ultralytics khi phân loại: cạnh ngắn về 224 (bilinear),
+    cắt giữa 224x224. image: bytes hoặc ảnh PIL. Dùng chung lúc xuất/đánh giá (yolo/export_pest.py, exif=False như lúc huấn luyện)
+    và lúc chạy app."""
+    im = image if isinstance(image, Image.Image) else Image.open(io.BytesIO(image))
+    if exif:  # ảnh điện thoại chụp dọc
+        im = ImageOps.exif_transpose(im)
+    im = im.convert("RGB")
+    w, h = im.size
+    nw, nh = (IMG_SIZE, int(IMG_SIZE * h / w)) if w <= h else (int(IMG_SIZE * w / h), IMG_SIZE)
+    if (nw, nh) != (w, h):
+        im = im.resize((nw, nh), Image.BILINEAR)
+    left, top = int(round((nw - IMG_SIZE) / 2.0)), int(round((nh - IMG_SIZE) / 2.0))
+    im = im.crop((left, top, left + IMG_SIZE, top + IMG_SIZE))
+    return np.asarray(im, dtype=np.float32).transpose(2, 0, 1) / 255.0
 
 def file_key(path):
     """Mã nhận diện file mô hình theo nội dung (chép file sang máy khác vẫn khớp, huấn luyện lại thì đổi)."""
@@ -265,47 +282,40 @@ def pest_entry(raw, prob):
                 beneficial=d["beneficial"])
 
 class PestService:
-    """Mô hình nhận diện sâu hại (204 loài INSECT204, cùng kiến trúc MobileNetV3Large), kèm tâm vector mỗi loài để nhận ra ảnh
-    không phải côn trùng/loài chưa học. Không có file mô hình hoặc nạp lỗi thì available=False."""
+    """Mô hình nhận diện sâu hại: YOLO11m-cls (204 loài INSECT204), chạy bằng onnxruntime trên CPU (không cần PyTorch), kèm tâm vector
+    mỗi loài để nhận ra ảnh không phải côn trùng / loài chưa học. Trên 31.312 ảnh test: đúng 76,3%, top-5 92,6% (MobileNetV3Large
+    trước đây 71,0% / 90,0%), ~18 ms/ảnh trên CPU (MobileNetV3Large ~79 ms). Không có file mô hình hoặc nạp lỗi thì available=False."""
 
     def __init__(self):
-        self.dual, self.class_names, self.centroids = None, [], None
+        self.session, self.class_names, self.centroids = None, [], None
         if not os.path.exists(PEST_MODEL_PATH):
             return
         try:
             with open(PEST_CLASSES_PATH, encoding="utf-8") as f:
                 names = json.load(f)
-            import tensorflow as tf
-            model = tf.keras.models.load_model(PEST_MODEL_PATH)
-            if model.output_shape[-1] != len(names):
-                raise ValueError(f"mô hình có {model.output_shape[-1]} lớp nhưng pest_class_names.json có {len(names)} lớp")
-            self.dual = tf.keras.Model(model.inputs, [model.output, model.get_layer("gap").output])
-            self._grad = grad_model_for(model, model.get_layer("gap").input)  # cho Grad-CAM
-            self.class_names = names
-            self.embed_key = file_key(PEST_MODEL_PATH)  # đổi mô hình thì bản đồ Grad-CAM đã lưu không còn đúng
+            import onnxruntime as ort
+            session = ort.InferenceSession(PEST_MODEL_PATH, providers=["CPUExecutionProvider"])
+            if session.get_outputs()[0].shape[-1] != len(names):
+                raise ValueError(f"mô hình có {session.get_outputs()[0].shape[-1]} lớp nhưng pest_class_names.json có {len(names)} lớp")
+            self.session, self.class_names = session, names
+            self.embed_key = file_key(PEST_MODEL_PATH)
             if os.path.exists(PEST_CENTROIDS_PATH):
                 c = np.load(PEST_CENTROIDS_PATH)
-                if str(c["embed_key"]) == file_key(PEST_MODEL_PATH):
+                if str(c["embed_key"]) == self.embed_key:
                     self.centroids = c["centroids"]
                 else:
-                    print("[pest] pest_centroids.npz không khớp pest_model.keras, hãy chạy lại train_pests.py", flush=True)
-        except Exception as e:  # thiếu TF hoặc file lỗi: app vẫn chạy, chỉ ẩn nhận diện sâu hại
-            self.dual = None
+                    print("[pest] pest_centroids.npz không khớp pest_model.onnx, hãy chạy lại yolo/export_pest.py", flush=True)
+        except Exception as e:  # thiếu onnxruntime hoặc file lỗi: app vẫn chạy, chỉ ẩn nhận diện sâu hại
+            self.session = None
             print("[pest] Không nạp được mô hình sâu hại:", e, flush=True)
 
     @property
     def available(self):
-        return self.dual is not None
+        return self.session is not None
 
     def predict(self, image_bytes: bytes, top_k: int = 3):
         """(top_k loài kèm thông tin hiển thị, độ giống cao nhất với tâm các loài hoặc None nếu chưa có tâm)."""
-        p, e = self.dual(np.expand_dims(np.asarray(load_image(image_bytes), dtype="float32"), 0), training=False)
-        p, e = np.asarray(p)[0], _unit(np.asarray(e)[0])
+        p, e = self.session.run(None, {"image": pest_preprocess(image_bytes)[None]})
+        p, e = p[0], _unit(e[0])
         fam = None if self.centroids is None else float(np.max(self.centroids @ e))
         return [pest_entry(self.class_names[i], p[i]) for i in np.argsort(-p)[:top_k]], fam
-
-    def gradcam(self, image_bytes: bytes, class_name: str):
-        """Grad-CAM cho loài class_name (mô hình phẳng: lớp tích chập cuối là đầu vào của lớp "gap")."""
-        if self.dual is None or class_name not in self.class_names:
-            return None
-        return gradcam_map(self._grad, image_bytes, self.class_names.index(class_name))

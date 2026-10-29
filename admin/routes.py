@@ -177,6 +177,7 @@ def admin_models():
         import pests as pk
         name = lambda c: f"{pk.info(c)['name']} ({c})"
         pest = dict(classes=m["classes"], images=m["images"], accuracy=m["accuracy"], top5=m["top5"], macro_f1=m["macro_f1"], finetune=m.get("finetune_epochs", 0),
+                    architecture=m.get("architecture") or "MobileNetV3Large",
                     worst=[dict(w, label=name(w["name"])) for w in m["worst"]], confused=[dict(c, true_label=name(c["true"]), pred_label=name(c["pred"])) for c in m["confused"]],
                     per_class=[dict(x, label=pk.info(x["name"])["name"]) for x in m["per_class"]],
                     trained=time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(p))))

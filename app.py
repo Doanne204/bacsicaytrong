@@ -29,7 +29,7 @@ def create_app(test_config=None):
         os.makedirs(os.path.dirname(os.path.abspath(app.config["DATABASE"])), exist_ok=True)
     init_db(app.config["DATABASE"])
     app.model = ModelService()
-    app.pests = PestService()  # nhận diện sâu hại; chưa có models/pest_model.keras thì ẩn lựa chọn này
+    app.pests = PestService()  # nhận diện sâu hại (YOLO11m-cls, ONNX); chưa có models/pest_model.onnx thì ẩn lựa chọn này
     backfill_embeddings(app)
     app.keys = KeyStore(app.config["DATABASE"], app.config["SECRET_KEY"])
     env_key = os.getenv("GEMINI_API_KEY")

@@ -42,7 +42,7 @@ export default function PrintSheet() {
             <p className="text-sm font-semibold text-[#6B6358]">{pest ? "Loài nhận diện" : d.plant}</p>
             <h2 className="text-2xl font-extrabold leading-tight">{d.disease}</h2>
             <p className="mt-1 text-sm"><b>Trạng thái:</b> {state}{!unknown && <> · <b>Độ tin cậy:</b> {pct(d.confidence)}</>}</p>
-            <p className="text-sm"><b>Nguồn:</b> {d.source === "ai" ? "Hệ thống phân tích" : d.source === "memory" ? "Dữ liệu hệ thống đã học" : pest ? "Mô hình nhận diện sâu hại (INSECT204)" : "Mô hình MobileNetV3 (PlantVillage)"}</p>
+            <p className="text-sm"><b>Nguồn:</b> {d.source === "ai" ? "Hệ thống phân tích" : d.source === "memory" ? "Dữ liệu hệ thống đã học" : pest ? "Mô hình nhận diện sâu hại YOLO11m (INSECT204)" : "Mô hình MobileNetV3 (PlantVillage)"}</p>
             {det.pest && <dl className="mt-2 text-sm"><div><b>Tên khoa học:</b> <i>{det.pest.sci}</i></div><div><b>Nhóm:</b> {det.pest.group_name}</div><div><b>{det.pest.beneficial ? "Vai trò" : "Cây bị hại"}:</b> {det.pest.hosts}</div></dl>}
             {det.symptoms && <p className="mt-2 text-sm"><b>Triệu chứng:</b> {det.symptoms}</p>}
             {!!det.top?.length && !unknown && <p className="mt-2 text-xs text-[#6B6358]"><b>Khả năng khác:</b> {det.top.filter((t) => t.raw !== d.raw).slice(0, 2).map((t) => `${t.disease} (${pct(t.prob)})`).join(", ")}</p>}

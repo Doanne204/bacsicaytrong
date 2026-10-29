@@ -12,7 +12,7 @@ import { DataTable } from "../components/table";
 interface PerClass { name: string; precision: number; recall: number; f1: number; support?: number; test?: number; label?: string }
 interface Models {
   leaf: { overall: Record<string, number>; per_class: PerClass[]; images: string[]; trained: string; reevaluated?: Reevaluated } | null;
-  pest: { classes: number; images: Record<string, number>; accuracy: number; top5: number; macro_f1: number; finetune: number; trained: string;
+  pest: { classes: number; images: Record<string, number>; accuracy: number; top5: number; macro_f1: number; finetune: number; architecture: string; trained: string;
     worst: (PerClass & { label: string })[]; confused: { true_label: string; pred_label: string; n: number }[]; per_class: (PerClass & { label: string })[] } | null;
   compare: { rows: CompareRow[]; chart: boolean; trained: string } | null;
   model_loaded: boolean; pest_loaded: boolean; class_count: number; pest_class_count: number;
@@ -47,7 +47,7 @@ export default function Models() {
     <div className="space-y-5 animate-fade-up">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex items-center gap-3 rounded-2xl border bg-card p-4"><Leaf className="h-6 w-6 text-primary" /><div><b>Mô hình bệnh lá</b><p className="text-sm text-muted-foreground">MobileNetV3Large, {m.class_count} lớp · {m.model_loaded ? "đang chạy" : "chưa nạp (chế độ DEMO)"}</p></div></div>
-        <div className="flex items-center gap-3 rounded-2xl border bg-card p-4"><Bug className="h-6 w-6 text-primary" /><div><b>Mô hình sâu hại</b><p className="text-sm text-muted-foreground">MobileNetV3Large + INSECT204, {m.pest_class_count} lớp · {m.pest_loaded ? "đang chạy" : "chưa nạp"}</p></div></div>
+        <div className="flex items-center gap-3 rounded-2xl border bg-card p-4"><Bug className="h-6 w-6 text-primary" /><div><b>Mô hình sâu hại</b><p className="text-sm text-muted-foreground">{m.pest?.architecture || "YOLO11m-cls"} + INSECT204, {m.pest_class_count} lớp · {m.pest_loaded ? "đang chạy" : "chưa nạp"}</p></div></div>
       </div>
       <Tabs defaultValue={m.leaf ? "leaf" : "pest"}>
         <TabsList><TabsTrigger value="leaf"><Leaf />Bệnh lá</TabsTrigger><TabsTrigger value="pest"><Bug />Sâu hại</TabsTrigger><TabsTrigger value="compare"><Scale />So sánh kiến trúc</TabsTrigger></TabsList>
@@ -108,7 +108,7 @@ export default function Models() {
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 {[["Accuracy (top-1)", pct(m.pest.accuracy)], ["Top-5", pct(m.pest.top5)], ["Macro-F1", m.pest.macro_f1.toFixed(3)], ["Ảnh test", m.pest.images.test?.toLocaleString("vi-VN")]].map(([k, v]) => <div key={k as string} className="rounded-2xl border bg-card p-4"><span className="text-xs uppercase text-muted-foreground">{k}</span><b className="block text-2xl">{v as string}</b></div>)}
               </div>
-              <p className="text-sm text-muted-foreground">{m.pest.classes} loài; train {m.pest.images.train?.toLocaleString("vi-VN")}, val {m.pest.images.val?.toLocaleString("vi-VN")}, test {m.pest.images.test?.toLocaleString("vi-VN")} ảnh (tỉ lệ 6:1:3 như bài báo INSECT204, đã bỏ ảnh trùng). {m.pest.finetune ? `Tinh chỉnh ${m.pest.finetune} epoch.` : "Chỉ học lớp phân loại trên vector MobileNetV3 ImageNet."} Huấn luyện lúc {m.pest.trained}.</p>
+              <p className="text-sm text-muted-foreground">{m.pest.classes} loài; train {m.pest.images.train?.toLocaleString("vi-VN")}, val {m.pest.images.val?.toLocaleString("vi-VN")}, test {m.pest.images.test?.toLocaleString("vi-VN")} ảnh (tỉ lệ 6:1:3 như bài báo INSECT204, đã bỏ ảnh trùng). {m.pest.architecture.startsWith("YOLO") ? `${m.pest.architecture} (Ultralytics) huấn luyện trên GPU, chạy trong app bằng ONNX trên CPU.` : m.pest.finetune ? `MobileNetV3Large tinh chỉnh ${m.pest.finetune} epoch.` : "Chỉ học lớp phân loại trên vector MobileNetV3 ImageNet."} Kết quả đánh giá ghi lúc {m.pest.trained}.</p>
               <div className="grid gap-4 lg:grid-cols-2">
                 <Card><CardHeader><CardTitle>Nhầm lẫn nhiều nhất</CardTitle><CardDescription>Cặp (loài đúng → loài dự đoán) hay sai nhất trên tập test.</CardDescription></CardHeader>
                   <CardContent><ul className="divide-y text-sm">{m.pest.confused.slice(0, 10).map((c, i) => <li key={i} className="flex items-center gap-2 py-2"><span className="min-w-0 flex-1 truncate">{c.true_label}</span><span className="text-muted-foreground">→</span><span className="min-w-0 flex-1 truncate">{c.pred_label}</span><b className="tabular-nums">{c.n}</b></li>)}</ul></CardContent></Card>

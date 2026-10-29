@@ -1,4 +1,4 @@
-# Bác sĩ cây trồng: phát hiện sâu bệnh từ ảnh lá (PlantVillage + MobileNetV3Large + Gemini)
+# Bác sĩ cây trồng: phát hiện sâu bệnh từ ảnh lá (PlantVillage + MobileNetV3Large, INSECT204 + YOLO11m + Gemini)
 
 ## Tính năng
 - **Đăng ký / đăng nhập**: tên đăng nhập, email, số điện thoại (không trùng, kiểm tra định dạng di động Việt Nam), mật khẩu. Đăng nhập bằng tên, email hoặc SĐT.
@@ -11,10 +11,12 @@
   3. Không khớp bộ nhớ -> Gemini phân tích; ảnh AI đủ chắc chắn (>= 60%) được lưu vào `dataset_ai/<Lớp>/` (cùng cấu trúc PlantVillage),
      cây mới hiện trong danh sách chọn cây, và ảnh vào bộ nhớ để nhận lại ngay lần sau.
   4. AI lỗi/hết lượt -> báo "Chưa xác định" kèm lý do và các khả năng mô hình đưa ra (không đoán bừa); có nút "Phân tích lại bằng AI".
-- **Nhận diện sâu hại** (mô hình thứ hai, 204 loài côn trùng, nhện, ốc hại và thiên địch của bộ INSECT204): chọn "Sâu hại, côn trùng"
-  khi tra cứu, hoặc để "Tự nhận diện": ảnh mà mô hình bệnh lá thấy lạ sẽ được thử bằng mô hình sâu hại. Kết quả có tên tiếng Việt,
-  tên khoa học, nhóm, cây bị hại, hướng phòng trừ theo IPM; thiên địch (bọ rùa, bọ ngựa, bọ xít bắt mồi...) được đánh dấu "có ích, đừng phun".
-  Ảnh khác xa các loài đã học (`models/pest_centroids.npz`) hoặc độ tin cậy dưới 50% -> "Chưa xác định được loài" kèm 3 loài gần nhất.
+- **Nhận diện sâu hại** (mô hình thứ hai **YOLO11m-cls**, 204 loài côn trùng, nhện, ốc hại và thiên địch của bộ INSECT204): chọn
+  "Sâu hại, côn trùng" khi tra cứu, hoặc để "Tự nhận diện": ảnh mà mô hình bệnh lá thấy lạ sẽ được thử bằng mô hình sâu hại (chỉ chuyển
+  khi rất chắc: độ giống tâm loài >= 0,60 và độ tin cậy >= 90%, không thì nhờ AI). Kết quả có tên tiếng Việt, tên khoa học, nhóm, cây bị
+  hại, hướng phòng trừ theo IPM; thiên địch (bọ rùa, bọ ngựa, bọ xít bắt mồi...) được đánh dấu "có ích, đừng phun".
+  Ảnh khác xa các loài đã học (`models/pest_centroids.npz`, độ giống < 0,50) hoặc độ tin cậy dưới 70% -> "Chưa xác định được loài" kèm
+  3 loài gần nhất. Mô hình chạy trong app bằng ONNX (`models/pest_model.onnx`, `onnxruntime`, CPU ~18 ms/ảnh), không cần PyTorch.
 - **Đăng bài**: chữ + ảnh; Gemini kiểm duyệt cả chữ và ảnh. Vi phạm -> từ chối, báo lý do ngay và gửi thông báo; không chắc chắn -> chờ quản trị viên duyệt.
 - **Thuốc nên dùng và nơi mua** (trang kết quả, bệnh lá và sâu hại; bấm mới tìm): Gemini có Google Search tìm sản phẩm đang bán ở Việt
   Nam (tên, hoạt chất, sinh học/hóa học, cách dùng, giá tham khảo, trang bán). Đường dẫn AI đưa ra được mở thử, chỉ giữ trang thật
@@ -101,7 +103,7 @@
   - Bài viết (duyệt/từ chối kèm lý do, tìm kiếm), bình luận (lọc bình luận AI chưa duyệt, xóa), đánh giá (lọc theo sao, xóa).
   - Người dùng: tìm kiếm, khóa/mở khóa, cấp/bỏ quyền quản trị, đặt lại mật khẩu (mật khẩu tạm hiện một lần), xóa tài khoản kèm dữ liệu.
   - Thống kê: tra cứu 12 tháng theo nguồn, bảng bệnh theo tháng, độ chính xác suy từ đánh giá sao (4-5 sao = đúng), lượt AI 30 ngày.
-  - Đánh giá mô hình: ma trận nhầm lẫn, precision/recall/F1 từng lớp đọc từ `results/` (train.py, train_pests.py); tab "So sánh kiến trúc"
+  - Đánh giá mô hình: ma trận nhầm lẫn, precision/recall/F1 từng lớp đọc từ `results/` (train.py, yolo/export_pest.py); tab "So sánh kiến trúc"
     đọc `results/compare/summary.csv` do `compare_models.py` ghi ra (xem "So sánh kiến trúc").
   - Dữ liệu AI: duyệt / sửa nhãn / xóa mẫu AI, xử lý báo kết quả sai của người dùng (xem "Báo kết quả sai và duyệt nhãn").
   - Khóa Gemini: thêm nhiều khóa (lưu mã hóa bằng khóa suy ra từ `SECRET_KEY`, chỉ hiện 4 ký tự đầu/cuối), kiểm tra, bật/tắt,
@@ -138,7 +140,8 @@ tools/node/             Node.js portable (không có trong git) dùng để buil
   `results/train_summary.json` gồm accuracy train/val/test). Muốn thử mà không đè mô hình đang dùng:
   `python train.py --data dataset/... --models_dir models/candidate --results_dir results/candidate` rồi chép sang `models/`, `results/`
   khi tốt hơn và chạy lại `flask --app app build-centroids dataset/...`. CPU i5-14600KF: khoảng 2-3 giờ; Colab T4: khoảng 30-40 phút.
-  `train_pests.py` huấn luyện mô hình sâu hại; `tests/test_app.py` kiểm thử
+  `yolo/train_yolo.py` + `yolo/export_pest.py` huấn luyện và đưa mô hình sâu hại YOLO11m-cls vào app (xem "Chạy", bước 3);
+  `train_pests.py` là mô hình sâu hại cũ (MobileNetV3Large), chỉ giữ để so sánh; `tests/test_app.py` kiểm thử
 - `compare_models.py` + `notebooks/so_sanh_kien_truc.ipynb` so sánh MobileNetV3Large / EfficientNet-B0 / ViT-B/16 (xem bên dưới)
 - `evaluate_leaf.py` đánh giá lại mô hình bệnh lá đang dùng khi không còn số liệu lúc huấn luyện (chia tập giống train.py, đo cả
   train/val/test, ghi `results/overall_metrics.csv`, `classification_report.csv`, `confusion_matrix.png`, `class_metrics.png`, `leaf_eval.json`):
@@ -165,14 +168,26 @@ và thời gian huấn luyện. ViT-B/16 lấy từ `keras-hub` (preset `vit_bas
    ảnh, mặc định 20, sẽ bị bỏ qua).
    Sau khi có mô hình (hoặc mỗi lần huấn luyện lại), tính tâm các lớp để nhận ra ảnh cây lạ:
    `flask --app app build-centroids dataset/Plant_leave_diseases_dataset_without_augmentation`
-   Mô hình sâu hại (bộ INSECT204 giải nén vào `dataset/`, mỗi loài một thư mục):
-   `python train_pests.py --data "dataset/INSECT204-A Novel Large-Scale Benchmark Dataset fo/INSECT204" --finetune_epochs 12`
-   (bỏ ảnh trùng, chia train/val/test 6:1:3 như bài báo; trích vector MobileNetV3 ImageNet học lớp phân loại, rồi tinh chỉnh toàn bộ
-   backbone với AdamW, LR cosine, label smoothing 0,1, tăng cường ảnh; CPU khoảng 2 giờ; ra `models/pest_model.keras`,
-   `pest_class_names.json`, `pest_centroids.npz`, `results/pest_metrics.json`, `pest_training_log.csv`).
-   Kết quả hiện tại (bản 2) trên 31.312 ảnh test: accuracy 71,0%, top-5 90,0%, macro-F1 0,696 (bản 1 chỉ học lớp phân loại:
-   67,7% / 88,2% / 0,669, sao lưu ở `backups/pest_v1_*`). Huấn luyện lại thì đo lại `PEST_FAMILIAR_MIN`, `PEST_MIN_PROB` trong
-   `client/routes.py` theo bảng `thresholds` và `familiarity_test` trong `pest_metrics.json`.
+   Mô hình sâu hại YOLO11m-cls (bộ INSECT204 giải nén vào `dataset/`, mỗi loài một thư mục; cần GPU NVIDIA và môi trường riêng
+   `.venv-yolo` có PyTorch CUDA + `ultralytics` + `onnx`):
+   - `python yolo/make_yolo_dataset.py`: chép ảnh theo phép chia train/val/test 6:1:3 trong `results/pest_split.csv` (đã bỏ ảnh trùng,
+     như bài báo INSECT204) sang `yolo/insect204/`, thu nhỏ cạnh ngắn 256 px.
+   - `.venv-yolo\Scripts\python.exe yolo\train_yolo.py --epochs 30`: YOLO11m-cls khởi đầu từ trọng số ImageNet, ảnh 224, AdamW,
+     LR cosine, dừng sớm (RTX 3060: ~55 phút); ra `yolo/runs/yolo11m-cls/weights/best.pt`, `results/yolo/yolo11m-cls/metrics.json`.
+   - `.venv-yolo\Scripts\python.exe yolo\export_pest.py`: xuất ONNX (xác suất + vector đặc trưng) ra `models/pest_model.onnx`,
+     `pest_class_names.json`, tâm vector mỗi loài `pest_centroids.npz`, đánh giá lại bằng đúng đường xử lý của app ra
+     `results/pest_metrics.json` (kèm bảng ngưỡng và độ quen của ảnh lá để chọn `PEST_*` trong `client/routes.py`); mô hình cũ sao lưu
+     vào `backups/`.
+   So sánh trên cùng 31.312 ảnh test (28-29/10/2026):
+
+   | Mô hình | Accuracy | Top-5 | Macro-F1 | Tham số | CPU ms/ảnh |
+   |---|---|---|---|---|---|
+   | **YOLO11m-cls (đang dùng)** | **76,3%** | **92,6%** | **0,748** | 10,6 M | 18 |
+   | YOLO11s-cls | 75,5% | 91,7% | 0,743 | 5,7 M | 9 |
+   | YOLO11n-cls | 73,2% | 90,7% | 0,713 | 1,8 M | 5 |
+   | MobileNetV3Large tinh chỉnh (`train_pests.py`, mô hình cũ) | 71,0% | 90,0% | 0,696 | 3,6 M | 79 |
+
+   Đo tốc độ CPU: `yolo/bench_cpu.py`. Huấn luyện lại thì chạy lại `export_pest.py` và đo lại các ngưỡng `PEST_*`.
 4. Tạo file `.env` (đã có trong `.gitignore`): `GEMINI_API_KEY=...` (lấy ở https://aistudio.google.com/apikey), `SECRET_KEY=chuoi-bi-mat`.
    Tuỳ chọn `GEMINI_MODEL=gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite` (mặc định): model hết hạn mức (gói miễn phí
    gemini-2.5-flash chỉ 20 lượt/ngày) thì tự chuyển sang model kế tiếp.
