@@ -62,12 +62,12 @@ function Samples({ status, onChange }: { status: "pending" | "approved"; onChang
     catch (e) { toast.error((e as Error).message); } finally { setBusy(null); }
   };
   if (list.isLoading) return <div className="grid gap-3 sm:grid-cols-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-28" />)}</div>;
-  if (!list.data?.length) return <div className="rounded-2xl border bg-card"><EmptyState icon={Sparkles} title={status === "pending" ? "Không còn ảnh nào chờ duyệt" : "Chưa có ảnh nào được duyệt"} /></div>;
+  if (!list.data?.length) return <div className="rounded-2xl border bg-card"><EmptyState icon={Sparkles} title={status === "pending" ? "Không còn ảnh bệnh mới nào chờ duyệt" : "Chưa có ảnh nào được duyệt"} /></div>;
   return (
     <div className="space-y-3">
       {status === "pending" && (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground">Xem ảnh và nhãn AI gán; đúng thì duyệt, sai thì sửa nhãn hoặc xóa.</p>
+          <p className="text-sm text-muted-foreground">Chỉ gồm bệnh, cây mới chưa có trong bộ dữ liệu của mô hình. Xem ảnh và nhãn AI gán; đúng thì duyệt, sai thì sửa nhãn hoặc xóa.</p>
           <Button variant="outline" size="sm" loading={busy === "all"} onClick={() => approve(list.data!.map((s) => s.id), "all")}><CheckCheck />Duyệt tất cả {list.data.length} mẫu đang hiện</Button>
         </div>
       )}

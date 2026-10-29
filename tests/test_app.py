@@ -1364,6 +1364,16 @@ class ReviewTests(Base):
         self.assertEqual(a.get("/api/admin/reports?status=done").get_json()[0]["status"], "rejected")
         self.assertIn("giữ nguyên", self.sql("select content from notifications")[0][0])
         self.assertEqual(self.sql("select count(*) from ai_samples"), [(0,)])
+    def test_known_classes_not_in_review_queue(self):
+        self.authed()
+        with self.ai(return_value=ai_answer(plant_vi="Cà chua", plant_en="Tomato", disease_vi="Mốc sương", disease_en="Late blight")):
+            self.predict("auto")  # AI gán đúng một lớp mô hình đã có (Tomato___Late_blight)
+        with self.ai(return_value=ai_answer()):
+            self.predict("other", leaf((200, 40, 40)))  # bệnh mới: Mango___Anthracnose
+        self.assertEqual(len(self.sql("select id from ai_samples where status='pending'")), 2)
+        a = self.admin_session()
+        self.assertEqual([x["class_name"] for x in a.get("/api/admin/samples").get_json()], ["Mango___Anthracnose"])
+        self.assertEqual(a.get("/api/admin/stats").get_json()["samples_pending"], 1)
     def test_ai_samples_wait_for_review_and_relabel(self):
         self.authed()
         with self.ai(return_value=ai_answer()):

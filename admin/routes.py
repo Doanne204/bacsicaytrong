@@ -7,7 +7,7 @@ from werkzeug.security import generate_password_hash
 import ai_service
 from core import (KeyStore, admin_required, check_login, db, drop_samples, err, image_url, is_pg, notify, post_out, post_rows,
                   remove_upload, spa_page, utcnow)
-from client.routes import apply_label, label_info, move_sample
+from client.routes import apply_label, label_info, model_class, move_sample
 
 bp = Blueprint("admin", __name__)
 
@@ -81,7 +81,8 @@ def admin_stats():
         pending=one("SELECT COUNT(*) FROM posts WHERE status='pending'"),
         comments=one("SELECT COUNT(*) FROM comments"), flagged=one("SELECT COUNT(*) FROM comments WHERE ai_decision IS DISTINCT FROM 'approve'"),
         ratings=one("SELECT COUNT(*) FROM ratings"), rating_avg=round(one("SELECT COALESCE(AVG(stars), 0) FROM ratings"), 2),
-        samples=one("SELECT COUNT(*) FROM ai_samples"), samples_pending=one("SELECT COUNT(*) FROM ai_samples WHERE status='pending'"),
+        samples=one("SELECT COUNT(*) FROM ai_samples"),
+        samples_pending=sum(1 for r in db().execute("SELECT class_name FROM ai_samples WHERE status='pending'") if not model_class(r[0])),
         reports_open=one("SELECT COUNT(*) FROM reports WHERE status='open'"),
         keys=dict(total=len(keys), enabled=sum(1 for k in keys if k["enabled"]), cooling=cooling),
         daily=[dict(day=d, n=per_day.get(d, 0)) for d in days],
@@ -406,13 +407,16 @@ def admin_settings():
 @bp.get("/api/admin/samples")
 @admin_required
 def admin_samples():
-    """Mẫu AI theo trạng thái (?status=pending: chờ duyệt, approved: đã duyệt, all), mới nhất trước."""
+    """Mẫu AI theo trạng thái (?status=pending: chờ duyệt, approved: đã duyệt, all), mới nhất trước. Chờ duyệt chỉ gồm bệnh / cây mới
+    (lớp chưa có trong bộ dữ liệu của mô hình): lớp đã có hàng nghìn ảnh PlantVillage nên không cần duyệt thêm ảnh AI."""
     status = request.args.get("status", "pending")
     where, params = ("WHERE s.status=? ", (status,)) if status in ("pending", "approved") else ("", ())
     rows = db().execute("SELECT s.id, s.class_name, s.confidence, s.status, s.created, s.diagnosis_id, u.username, d.plant, d.disease, d.image, "
                         "d.source FROM ai_samples s LEFT JOIN users u ON u.id=s.user_id LEFT JOIN diagnoses d ON d.id=s.diagnosis_id "
-                        + where + "ORDER BY s.id DESC LIMIT 200", params).fetchall()
-    return jsonify([dict(r, image_url=image_url(r["image"])) for r in rows])
+                        + where + "ORDER BY s.id DESC", params).fetchall()
+    if status == "pending":
+        rows = [r for r in rows if not model_class(r["class_name"])]
+    return jsonify([dict(r, image_url=image_url(r["image"])) for r in rows[:200]])
 
 @bp.post("/api/admin/samples/approve")
 @admin_required
