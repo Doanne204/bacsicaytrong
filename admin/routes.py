@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, current_app, jsonify, request, send_from_directory, session
 from werkzeug.security import generate_password_hash
 import ai_service
-from core import (KeyStore, admin_required, check_login, db, drop_samples, err, image_url, is_pg, notify, post_out, post_rows,
+from core import (KeyStore, admin_required, check_login, db, drop_diagnosis, drop_samples, err, image_url, is_pg, notify, post_out, post_rows,
                   remove_upload, spa_page, utcnow)
 from client.routes import apply_label, label_info, model_class, move_sample
 
@@ -143,9 +143,8 @@ def admin_analytics():
                    keys=dict(ok=int(keys_ok[0]), fail=int(keys_ok[1])))
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
-RESULT_FILES = {"confusion_matrix.png", "class_metrics.png", "training_accuracy.png", "training_loss.png",
-                "gradcam_examples.png", "gradcam_errors.png"}  # 2 hình cuối do gradcam_examples.py vẽ
-RESULT_ORDER = ["confusion_matrix.png", "class_metrics.png", "gradcam_examples.png", "gradcam_errors.png", "training_accuracy.png", "training_loss.png"]
+RESULT_FILES = {"confusion_matrix.png", "class_metrics.png", "training_accuracy.png", "training_loss.png"}
+RESULT_ORDER = ["confusion_matrix.png", "class_metrics.png", "training_accuracy.png", "training_loss.png"]
 
 @bp.get("/api/admin/models")
 @admin_required
@@ -273,6 +272,58 @@ def admin_delete_user(uid):
     for f in files:
         remove_upload(f)
     return jsonify(ok=True)
+
+# Lượt tra cứu: ai tra cứu cây gì, cây nào có những ai tra cứu; xóa lượt tra cứu của người dùng
+LOOKUP_LIMIT = 300
+
+@bp.get("/api/admin/lookups/summary")
+@admin_required
+def admin_lookups_summary():
+    """Tổng hợp theo người dùng (các cây đã tra cứu) và theo cây (những người đã tra cứu)."""
+    rows = db().execute("SELECT d.user_id, u.username, COALESCE(d.plant, 'Không rõ') plant, COUNT(*) n, MAX(d.created) last FROM diagnoses d "
+                        "LEFT JOIN users u ON u.id=d.user_id GROUP BY d.user_id, u.username, COALESCE(d.plant, 'Không rõ')").fetchall()
+    users, plants = {}, {}
+    for r in rows:
+        u = users.setdefault(r["user_id"], dict(user_id=r["user_id"], username=r["username"] or "(đã xóa)", n=0, last=r["last"], plants=[]))
+        u["n"] += r["n"]; u["last"] = max(u["last"], r["last"]); u["plants"].append(dict(plant=r["plant"], n=r["n"]))
+        p = plants.setdefault(r["plant"], dict(plant=r["plant"], n=0, last=r["last"], users=[]))
+        p["n"] += r["n"]; p["last"] = max(p["last"], r["last"]); p["users"].append(dict(user_id=r["user_id"], username=u["username"], n=r["n"]))
+    for u in users.values():
+        u["plants"].sort(key=lambda x: -x["n"])
+    for p in plants.values():
+        p["users"].sort(key=lambda x: -x["n"])
+    return jsonify(total=sum(u["n"] for u in users.values()), by_user=sorted(users.values(), key=lambda u: -u["n"]),
+                   by_plant=sorted(plants.values(), key=lambda p: -p["n"]))
+
+@bp.get("/api/admin/lookups")
+@admin_required
+def admin_lookups():
+    """Các lượt tra cứu mới nhất, lọc theo ?user_id=, ?plant= và tìm ?q= (tên người dùng, cây, bệnh)."""
+    q, like = search_args()
+    where, params = ["(? = '' OR u.username LIKE ? OR d.plant LIKE ? OR d.disease LIKE ?)"], [q, like, like, like]
+    if request.args.get("user_id", type=int) is not None:
+        where.append("d.user_id=?"); params.append(request.args.get("user_id", type=int))
+    if request.args.get("plant"):
+        where.append("COALESCE(d.plant, 'Không rõ')=?"); params.append(request.args["plant"][:100])
+    cond = " FROM diagnoses d LEFT JOIN users u ON u.id=d.user_id WHERE " + " AND ".join(where)
+    total = db().execute("SELECT COUNT(*)" + cond, params).fetchone()[0]
+    rows = db().execute("SELECT d.id, d.user_id, u.username, d.plant, d.disease, d.healthy, d.confidence, d.source, d.image, d.created" + cond +
+                        f" ORDER BY d.id DESC LIMIT {LOOKUP_LIMIT}", params).fetchall()
+    return jsonify(total=total, rows=[dict(r, image_url=image_url(r["image"])) for r in rows])
+
+@bp.post("/api/admin/lookups/delete")
+@admin_required
+def admin_delete_lookups():
+    """Xóa các lượt tra cứu {"ids": [...]} cùng chat, đánh giá kèm theo và ảnh tải lên (ảnh trong dataset_ai vẫn giữ để huấn luyện)."""
+    ids = [int(i) for i in (request.get_json(silent=True) or {}).get("ids") or [] if str(i).isdigit()][:LOOKUP_LIMIT]
+    if not ids:
+        return err("Chưa chọn lượt tra cứu nào")
+    rows = db().execute(f"SELECT id, image, details FROM diagnoses WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    files = [f for r in rows for f in drop_diagnosis(r)]
+    db().commit()
+    for f in files:
+        remove_upload(f)
+    return jsonify(ok=True, deleted=len(rows))
 
 # Bình luận
 @bp.get("/api/admin/comments")

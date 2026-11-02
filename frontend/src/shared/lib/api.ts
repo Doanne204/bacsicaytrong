@@ -67,7 +67,8 @@ export interface Notification { id: number; content: string; link: string | null
 // ---------- Nhật ký điều trị, nhắc việc ----------
 export type LogKind = "phun" | "tia" | "tuoi" | "kiemtra" | "khac";
 export const LOG_KINDS: Record<LogKind, string> = { phun: "Phun thuốc", tia: "Tỉa, vệ sinh", tuoi: "Tưới, bón phân", kiemtra: "Kiểm tra cây", khac: "Việc khác" };
-export interface Reminder { id: number; content: string; due: string; repeat_days: number; done: number; created?: string }
+/** status: done (đã làm), todo (chưa làm), overdue (chưa làm, đến hạn), skipped (chưa làm khi nhật ký đã khép). */
+export interface Reminder { id: number; content: string; due: string; repeat_days: number; done: number; created?: string; status?: "done" | "todo" | "overdue" | "skipped"; done_at?: string | null; times_done?: number }
 export interface DueReminder extends Reminder { treatment_id: number; name: string | null; plant: string; disease: string; overdue: boolean }
 /** Lịch việc theo ngày (/api/agenda): việc cần làm (projected = lần lặp lại sắp tới, chưa có thật) và việc đã làm. */
 export interface AgendaTask extends DueReminder { projected: boolean }
@@ -76,7 +77,7 @@ export interface Agenda { tasks: AgendaTask[]; logs: AgendaLog[] }
 export interface LogEntry { id: number; kind: LogKind; content: string; image_url: string | null; done_at: string | null; created: string }
 export interface Treatment {
   id: number; diagnosis_id: number | null; name: string | null; plant: string; disease: string; status: "active" | "done"; created: string; closed: string | null;
-  logs: number; pending: number; overdue: number; next: { content: string; due: string } | null; last_log: string | null;
+  logs: number; pending: number; overdue: number; next: { content: string; due: string } | null; last_log: string | null; steps: { done: number; total: number };
   diagnosis: { id: number; image_url: string | null; confidence: number; healthy: number; plant_id: string; source: string } | null;
 }
 export interface TreatmentDetail extends Treatment { reminders: Reminder[]; entries: LogEntry[]; remedy?: string | null }

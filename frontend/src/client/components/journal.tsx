@@ -13,6 +13,9 @@ import { Field } from "@/shared/ui/misc";
 export const KIND_ICON: Record<LogKind, React.ComponentType<{ className?: string }>> = { phun: SprayCan, tia: Scissors, tuoi: Droplets, kiemtra: Eye, khac: Wrench };
 
 /** "Quá hạn 2 ngày", "Hôm nay 07:00", "Ngày mai 07:00", "Thứ ba 29/10, 07:00". */
+/** Đã tới ngày hạn chưa: trước ngày hạn thì chưa được đánh dấu đã làm (máy chủ cũng kiểm tra). */
+export const dueDayReached = (due: string) => dayKey(toDate(due)) <= dayKey(new Date());
+
 export function dueLabel(due: string) {
   const d = toDate(due), now = new Date(), diffDays = Math.round((new Date(dayKey(d)).getTime() - new Date(dayKey(now)).getTime()) / 864e5);
   if (d.getTime() < now.getTime()) return diffDays === 0 ? `Hôm nay ${fmtTime(d)}, đã đến hạn` : `Quá hạn ${-diffDays} ngày (${fmtDate(d)})`;

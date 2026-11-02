@@ -7,7 +7,7 @@ import { api, send, type DueReminder, type Treatment } from "@/shared/lib/api";
 import { ago } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Badge } from "@/shared/ui/badge";
-import { EmptyState, Skeleton } from "@/shared/ui/misc";
+import { EmptyState, Progress, Skeleton } from "@/shared/ui/misc";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { PageHeader } from "@/shared/components/common";
 import { TrackDialog, dueLabel } from "../components/journal";
@@ -44,6 +44,12 @@ export default function Journal() {
                     {t.overdue ? <Badge variant="destructive"><AlarmClock />{t.overdue} việc đến hạn</Badge> : t.next ? <Badge variant="muted"><AlarmClock />{dueLabel(t.next.due)}</Badge> : t.status === "active" ? <Badge variant="muted">Chưa đặt nhắc</Badge> : <Badge variant="success"><CheckCircle2 />Đã xong</Badge>}
                     <span>{t.logs} ghi chép{t.last_log ? `, ${ago(t.last_log)}` : ""}</span>
                   </div>
+                  {!!t.steps.total && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                      <Progress value={(t.steps.done / t.steps.total) * 100} className="h-1.5 flex-1" aria-label="Tiến độ các việc" />
+                      <span className="shrink-0 tabular-nums">Đã làm {t.steps.done}/{t.steps.total}</span>
+                    </div>
+                  )}
                 </div>
               </Link>
             );

@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS email_codes(id INTEGER PRIMARY KEY, email TEXT NOT NULL, code TEXT NOT NULL, purpose TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS treatments(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, diagnosis_id INTEGER, name TEXT, plant TEXT, disease TEXT, status TEXT NOT NULL DEFAULT 'active', created TEXT DEFAULT CURRENT_TIMESTAMP, closed TEXT);
 CREATE TABLE IF NOT EXISTS treatment_logs(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'khac', content TEXT, image TEXT, done_at TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, due TEXT NOT NULL, repeat_days INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, due TEXT NOT NULL, repeat_days INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, done_at TEXT, times_done INTEGER NOT NULL DEFAULT 0, prev_due TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS lookup_cache(key TEXT PRIMARY KEY, data TEXT NOT NULL, user_id INTEGER, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY, user_id INTEGER, diagnosis_id INTEGER NOT NULL, class_name TEXT, plant TEXT, disease TEXT, note TEXT, old_label TEXT, status TEXT NOT NULL DEFAULT 'open', answer TEXT, reviewed_by INTEGER, reviewed TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS push_subs(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -41,6 +41,7 @@ MIGRATIONS = {"users": {"phone": "TEXT", "role": "TEXT NOT NULL DEFAULT 'user'",
               # mẫu AI có từ trước khi có bước duyệt: chưa ai rà soát nên cũng là "chờ duyệt"
               "ai_samples": {"embedding": "BLOB", "embed_key": "TEXT", "status": "TEXT NOT NULL DEFAULT 'pending'", "reviewed": "TEXT"},
               "chats": {"image": "TEXT"},
+              "reminders": {"done_at": "TEXT", "times_done": "INTEGER NOT NULL DEFAULT 0", "prev_due": "TEXT"},
               "posts": {"diagnosis_id": "INTEGER", "shared_post_id": "INTEGER"}}
 
 def norm_phone(p):
@@ -143,6 +144,10 @@ def init_db(target):
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {pg_types(typ) if pg else typ}")
                     if (table, col) == ("users", "verified"):  # tài khoản tạo trước khi có xác thực email: coi như đã xác thực
                         c.execute("UPDATE users SET verified=1")
+                    if (table, col) == ("reminders", "prev_due"):  # nhắc việc cũ: làm thật thì có ghi chép "Đã làm: ...", không có là bị khép theo nhật ký
+                        logs = "FROM treatment_logs l WHERE l.treatment_id=reminders.treatment_id AND l.content='Đã làm: ' || reminders.content"
+                        c.execute(f"UPDATE reminders SET times_done=(SELECT COUNT(*) {logs})")
+                        c.execute(f"UPDATE reminders SET done_at=(SELECT MAX(substr(CAST(l.created AS TEXT), 1, 19)) {logs}) WHERE done=1")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_phone ON users(phone)")
         c.commit()
 
@@ -401,6 +406,22 @@ def remove_upload(name):
 
 def image_url(name):
     return f"/uploads/{name}" if name else None
+
+def drop_diagnosis(d):
+    """Xóa một lượt tra cứu cùng chat, đánh giá, báo cáo sai kèm theo (ảnh đã lưu vào dataset_ai vẫn giữ để huấn luyện).
+    Trả về danh sách file tải lên cần xóa sau khi commit (remove_upload)."""
+    did, files = d["id"], [r[0] for r in db().execute("SELECT image FROM chats WHERE diagnosis_id=? AND image IS NOT NULL", (d["id"],))]
+    for t in ("chats", "ratings", "reports"):
+        db().execute(f"DELETE FROM {t} WHERE diagnosis_id=?", (did,))
+    db().execute("UPDATE posts SET diagnosis_id=NULL WHERE diagnosis_id=?", (did,))  # bài đã chia sẻ thì bỏ thẻ kết quả
+    db().execute("UPDATE treatments SET diagnosis_id=NULL WHERE diagnosis_id=?", (did,))  # nhật ký điều trị vẫn giữ
+    db().execute("DELETE FROM diagnoses WHERE id=?", (did,))
+    if d["image"]:
+        files += [d["image"], d["image"][:-4] + "-cam.jpg", d["image"][:-4] + "-lesion.jpg"]
+        det = json.loads(d["details"]) if d["details"] else {}
+        for c in list(det.get("cams", {}).values()) + det.get("photos", []):  # bản đồ Grad-CAM của kết quả cũ, ảnh thêm và ảnh vết bệnh của chúng
+            files += [c[k].removeprefix("/uploads/") for k in ("url", "lesion_url") if c.get(k) and c[k] != image_url(d["image"])]
+    return files
 
 # ---------- Giao diện React đã build (frontend/dist) ----------
 DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")

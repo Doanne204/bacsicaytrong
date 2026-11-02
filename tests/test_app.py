@@ -1103,6 +1103,61 @@ class AdminTests(Base):
             create_app(self.config("env.db"))
         self.assertEqual([k["label"] for k in app.keys.keys()], ["Khóa từ file .env"])
 
+class AdminLookupTests(Base):
+    """Trang quản trị: ai tra cứu cây gì, cây nào có những ai tra cứu; xóa lượt tra cứu của người dùng."""
+    def seed(self):
+        self.signup(); self.login()
+        a = self.predict("tomato").get_json()["diagnosis_id"]
+        b = self.predict("tomato", leaf((200, 40, 40))).get_json()["diagnosis_id"]
+        c = self.predict("potato", leaf((40, 40, 200))).get_json()["diagnosis_id"]
+        self.c.post("/api/logout"); self.signup("user2", "u2@b.vn", ph="0987654321"); self.login("user2")
+        d = self.predict("tomato", leaf((90, 90, 20))).get_json()["diagnosis_id"]
+        self.c.post("/api/logout"); self.make_admin(); self.login()
+        self.run_sql("UPDATE diagnoses SET plant='Cà chua' WHERE id IN (?,?,?)", a, b, d); self.run_sql("UPDATE diagnoses SET plant='Khoai tây' WHERE id=?", c)
+        return a, b, c, d
+    def test_summary_by_user_and_plant(self):
+        self.seed()
+        s = self.c.get("/api/admin/lookups/summary").get_json()
+        self.assertEqual(s["total"], 4)
+        u = next(x for x in s["by_user"] if x["username"] == "nguyenvan")
+        self.assertEqual((u["n"], u["plants"]), (3, [{"plant": "Cà chua", "n": 2}, {"plant": "Khoai tây", "n": 1}]))
+        tomato = next(x for x in s["by_plant"] if x["plant"] == "Cà chua")
+        self.assertEqual((tomato["n"], [(x["username"], x["n"]) for x in tomato["users"]]), (3, [("nguyenvan", 2), ("user2", 1)]))
+    def test_list_filters(self):
+        self.seed()
+        uid = self.sql("select id from users where username='user2'")[0][0]
+        get = lambda qs="": self.c.get("/api/admin/lookups" + qs).get_json()
+        self.assertEqual(get()["total"], 4)
+        self.assertEqual([r["username"] for r in get(f"?user_id={uid}")["rows"]], ["user2"])
+        self.assertEqual(get("?plant=" + urllib.parse.quote("Khoai tây"))["total"], 1)
+        self.assertEqual(get(f"?user_id={uid}&plant=" + urllib.parse.quote("Khoai tây"))["total"], 0)
+        self.assertEqual(get("?q=user2")["total"], 1); self.assertEqual(get("?q=" + urllib.parse.quote("Khoai"))["total"], 1)
+        self.assertEqual(get("?q=khongco")["rows"], [])
+    def test_delete_lookups(self):
+        a, b, c, d = self.seed()
+        owner = self.sql("select user_id from diagnoses where id=?", a)[0][0]
+        self.run_sql("INSERT INTO ratings(user_id,diagnosis_id,stars) VALUES(?,?,5)", owner, a)
+        self.run_sql("INSERT INTO chats(user_id,diagnosis_id,role,content) VALUES(?,?,'user','x')", owner, a)
+        self.run_sql("INSERT INTO treatments(user_id,diagnosis_id,plant,disease) VALUES(?,?,'Cà chua','x')", owner, a)
+        img = self.sql("select image from diagnoses where id=?", a)[0][0]
+        path = os.path.join(self.app.config["UPLOAD_DIR"], img); self.assertTrue(os.path.exists(path))
+        self.assertEqual(self.c.post("/api/admin/lookups/delete", json={"ids": []}).status_code, 400)
+        self.assertEqual(self.c.post("/api/admin/lookups/delete", json={"ids": [a, d, 99999]}).get_json()["deleted"], 2)
+        self.assertEqual(sorted(r[0] for r in self.sql("select id from diagnoses")), sorted([b, c]))
+        self.assertEqual(self.sql("select count(*) from ratings where diagnosis_id=?", a), [(0,)])
+        self.assertEqual(self.sql("select count(*) from chats where diagnosis_id=?", a), [(0,)])
+        self.assertEqual(self.sql("select diagnosis_id from treatments"), [(None,)])  # nhật ký điều trị vẫn giữ
+        self.assertFalse(os.path.exists(path))  # ảnh tải lên bị xóa
+    def test_admin_only(self):
+        a, *_ = self.seed()
+        self.c.post("/api/logout"); self.login("user2")
+        for r in (self.c.get("/api/admin/lookups"), self.c.get("/api/admin/lookups/summary"), self.c.post("/api/admin/lookups/delete", json={"ids": [a]})):
+            self.assertEqual(r.status_code, 403)
+        self.assertEqual(len(self.sql("select id from diagnoses where id=?", a)), 1)
+    def test_no_gradcam_in_model_results(self):
+        self.seed()
+        self.assertEqual(self.c.get("/api/admin/results/gradcam_examples.png").status_code, 404)
+
 class AdminDataTests(Base):
     def test_samples_list_and_delete(self):
         self.authed(); self.make_admin()
@@ -1493,6 +1548,60 @@ class JournalTests(Base):
         return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     def at(self, days):  # cho query string: dấu + của múi giờ phải mã hóa
         return urllib.parse.quote(self.due(days))
+    def test_reminder_done_undone_tracking(self):
+        """Mỗi việc biết đã làm hay chưa, làm lúc nào; bỏ đánh dấu thì gỡ ghi chép tự động; khép / mở lại nhật ký không làm sai trạng thái."""
+        self.authed()
+        tid = self.c.post("/api/treatments", json={"plant": "Cà chua", "disease": "Đốm vòng", "reminders": [
+            {"content": "Phun lần 2", "due": self.due(-1)}, {"content": "Kiểm tra lá", "due": self.due(3), "repeat_days": 3}]}).get_json()["id"]
+        get = lambda: self.c.get(f"/api/treatments/{tid}").get_json()
+        rem = lambda name: next(r for r in get()["reminders"] if r["content"] == name)
+        put = lambda name, done: self.c.put(f"/api/reminders/{rem(name)['id']}", json={"done": done})
+        self.assertEqual((rem("Phun lần 2")["status"], rem("Kiểm tra lá")["status"]), ("overdue", "todo"))
+        self.assertEqual(get()["steps"], {"done": 0, "total": 2})
+        put("Phun lần 2", 1); put("Phun lần 2", 1)  # bấm hai lần: không ghi trùng
+        r = rem("Phun lần 2")
+        self.assertEqual((r["status"], r["times_done"]), ("done", 1)); self.assertTrue(r["done_at"])
+        self.assertEqual(get()["steps"], {"done": 1, "total": 2}); self.assertEqual(self.c.get("/api/treatments").get_json()[0]["steps"]["done"], 1)
+        self.assertEqual([e["content"] for e in get()["entries"]], ["Đã làm: Phun lần 2"])
+        put("Phun lần 2", 0)
+        r = rem("Phun lần 2")
+        self.assertEqual((r["status"], r["done_at"], r["times_done"]), ("overdue", None, 0)); self.assertEqual(get()["entries"], [])  # gỡ ghi chép tự động
+        r = put("Kiểm tra lá", 1)  # còn 3 ngày mới đến hạn: chưa được đánh dấu
+        self.assertEqual(r.status_code, 400); self.assertIn("Chưa đến hạn", r.get_json()["error"])
+        self.assertEqual((rem("Kiểm tra lá")["status"], rem("Kiểm tra lá")["times_done"]), ("todo", 0)); self.assertEqual(get()["entries"], [])
+        self.c.put(f"/api/reminders/{rem('Kiểm tra lá')['id']}", json={"due": self.due(-1)})
+        due = rem("Kiểm tra lá")["due"]
+        put("Kiểm tra lá", 1)  # việc lặp lại: đã làm lần này, hẹn lần sau
+        r = rem("Kiểm tra lá")
+        self.assertEqual((r["status"], r["done"], r["times_done"]), ("done", 0, 1)); self.assertGreater(r["due"], due)
+        self.assertEqual(put("Kiểm tra lá", 1).status_code, 400)  # chưa tới hẹn lần sau: không tính thêm lần nữa
+        put("Kiểm tra lá", 0)  # hoàn tác lần vừa rồi: về hạn cũ
+        r = rem("Kiểm tra lá")
+        self.assertEqual((r["status"], r["due"], r["times_done"]), ("overdue", due, 0)); self.assertEqual(get()["entries"], [])
+        put("Kiểm tra lá", 1); self.c.put(f"/api/treatments/{tid}", json={"status": "done"})
+        self.assertEqual({r["status"] for r in get()["reminders"]}, {"skipped"}); self.assertEqual(get()["steps"], {"done": 0, "total": 2})  # khép: chưa làm vẫn là chưa làm
+        self.c.put(f"/api/treatments/{tid}", json={"status": "active"})
+        self.assertEqual(rem("Phun lần 2")["status"], "overdue"); self.assertEqual(rem("Phun lần 2")["done"], 0)  # mở lại: quay về danh sách
+    def test_due_day_reached_vietnam_time(self):
+        from datetime import datetime
+        from client.routes import due_day_reached as ok
+        now = datetime(2026, 11, 2, 2, 0, 0)  # 09:00 ngày 02/11 giờ Việt Nam
+        self.assertTrue(ok("2026-11-02 10:00:00", now))  # 17:00 cùng ngày: trong ngày hạn thì làm sớm vài giờ vẫn được
+        self.assertTrue(ok("2026-11-01 00:00:00", now))  # đã quá hạn
+        self.assertFalse(ok("2026-11-02 17:00:00", now))  # 00:00 ngày 03/11 giờ Việt Nam: ngày mai
+    def test_old_reminders_upgraded(self):
+        """CSDL cũ chưa có cột trạng thái: việc có ghi chép "Đã làm" là đã làm, việc bị khép theo nhật ký là chưa làm."""
+        path = os.path.join(self.tmp.name, "old.db")
+        with closing(sqlite3.connect(path)) as c:
+            c.executescript("""CREATE TABLE reminders(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, due TEXT NOT NULL,
+                               repeat_days INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, notified INTEGER NOT NULL DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
+                               CREATE TABLE treatment_logs(id INTEGER PRIMARY KEY, treatment_id INTEGER NOT NULL, user_id INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'khac', content TEXT, image TEXT, done_at TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
+                               INSERT INTO reminders(treatment_id,user_id,content,due,done) VALUES(1,1,'Phun','2026-01-01 00:00:00',1),(1,1,'Tỉa','2026-01-01 00:00:00',1),(1,1,'Xem','2030-01-01 00:00:00',0);
+                               INSERT INTO treatment_logs(treatment_id,user_id,content,created) VALUES(1,1,'Đã làm: Phun','2026-01-02 03:04:05');""")
+        core.init_db(path)
+        with closing(connect(path)) as c:
+            rows = [tuple(r) for r in c.execute("SELECT content, done_at, times_done FROM reminders ORDER BY id")]
+        self.assertEqual(rows, [("Phun", "2026-01-02 03:04:05", 1), ("Tỉa", None, 0), ("Xem", None, 0)])
     def test_agenda_by_day(self):
         """Lịch việc theo khoảng ngày: việc cần làm (kể cả các lần lặp lại sắp tới), việc đã làm; giới hạn khoảng thời gian."""
         self.authed()
@@ -1566,6 +1675,8 @@ class JournalTests(Base):
         rm = [r for r in d["reminders"] if r["id"] == rid][0]
         self.assertEqual(rm["done"], 0); self.assertGreater(rm["due"], self.due(6)[:19].replace("T", " "))  # lặp: hẹn lại sau 7 ngày, chưa xong
         rid2 = [r for r in d["reminders"] if r["content"] == "Kiểm tra"][0]["id"]
+        self.assertEqual(self.c.put(f"/api/reminders/{rid2}", json={"done": 1}).status_code, 400)  # ngày mai mới đến hạn
+        self.c.put(f"/api/reminders/{rid2}", json={"due": self.due(-1)})
         self.c.put(f"/api/reminders/{rid2}", json={"done": 1})
         self.assertEqual([r["done"] for r in self.c.get(f"/api/treatments/{tid}").get_json()["reminders"] if r["id"] == rid2], [1])
         self.c.put(f"/api/reminders/{rid2}", json={"done": 0})

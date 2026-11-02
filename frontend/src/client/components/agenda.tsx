@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Repeat } from "lucide-react";
+import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Lock, Repeat } from "lucide-react";
 import { api, LOG_KINDS, type Agenda, type AgendaTask, type DueReminder } from "@/shared/lib/api";
 import { cn, dayKey, fmtTime, toDate } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Badge } from "@/shared/ui/badge";
 import { Skeleton } from "@/shared/ui/misc";
-import { KIND_ICON } from "./journal";
+import { KIND_ICON, dueDayReached } from "./journal";
 
 const WEEK = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
 const WEEKDAY = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
@@ -87,6 +87,7 @@ export function AgendaCalendar({ overdue, onDone }: { overdue: DueReminder[]; on
                 {[...late.map((r) => ({ ...r, projected: false })), ...sel.tasks].map((t) => (
                   <li key={`${t.id}-${t.due}`} className="flex items-center gap-3 p-2.5 text-sm">
                     {t.projected ? <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-dashed text-muted-foreground"><Repeat className="h-3.5 w-3.5" /></span>
+                      : !dueDayReached(t.due) ? <span title="Đến ngày hạn mới đánh dấu đã làm được" aria-label="Chưa đến hạn" role="img" className="grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-dashed text-muted-foreground"><Lock className="h-3.5 w-3.5" /></span>
                       : <button type="button" onClick={() => onDone(t)} className="grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-primary text-primary transition hover:bg-primary hover:text-primary-foreground" aria-label={`Đánh dấu đã làm: ${t.content}`}><CheckCircle2 className="h-4 w-4" /></button>}
                     <span className="min-w-0 flex-1"><b className="block">{t.content}</b><Link to={`/journal/${t.treatment_id}`} className="text-xs text-muted-foreground hover:text-primary">{label(t)}</Link></span>
                     <span className="shrink-0 text-right text-xs">

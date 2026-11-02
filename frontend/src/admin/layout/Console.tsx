@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { BarChart3, Cpu, Database, ExternalLink, KeyRound, LayoutGrid, LogOut, Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, PenSquare, Star, Users, X } from "lucide-react";
+import { BarChart3, Cpu, Database, ExternalLink, KeyRound, LayoutGrid, LogOut, Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, PenSquare, ScanSearch, Star, Users, X } from "lucide-react";
 import { useLogout, useMe } from "@/shared/hooks/use-me";
 import { useSidebar } from "@/shared/hooks/use-sidebar";
 import { Brand, Logo } from "@/shared/components/brand";
@@ -15,6 +15,7 @@ export const NAV = [
   { to: "/posts", label: "Bài viết", icon: PenSquare, desc: "Duyệt các bài AI chưa chắc chắn, gỡ bài đã đăng khi cần.", count: (s: Stats) => s.pending },
   { to: "/comments", label: "Bình luận", icon: MessageSquare, desc: "Xem lại bình luận AI chưa duyệt, xóa bình luận vi phạm.", count: (s: Stats) => s.flagged },
   { to: "/users", label: "Người dùng", icon: Users, desc: "Khóa tài khoản, cấp quyền quản trị, đặt lại mật khẩu." },
+  { to: "/lookups", label: "Lượt tra cứu", icon: ScanSearch, desc: "Ai tra cứu cây gì, cây nào có những ai tra cứu; xóa lượt tra cứu của người dùng." },
   { to: "/ratings", label: "Đánh giá", icon: Star, desc: "Đánh giá của người dùng về kết quả tra cứu." },
   { to: "/stats", label: "Thống kê", icon: BarChart3, desc: "Tra cứu theo tháng, bệnh theo mùa, độ chính xác suy từ đánh giá, lượt AI." },
   { to: "/models", label: "Đánh giá mô hình", icon: Cpu, desc: "Ma trận nhầm lẫn, precision/recall/F1 từng lớp của hai mô hình." },

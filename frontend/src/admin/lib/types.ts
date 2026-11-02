@@ -8,6 +8,14 @@ export interface AdminComment { id: number; content: string; created: string; ai
 export interface AdminRating { id: number; stars: number; comment: string; created: string; username: string; plant: string | null; disease: string | null; image_url: string | null; source: string | null }
 export interface AdminKey { id: number; label: string; masked: string | null; enabled: boolean; ok_count: number; fail_count: number; last_used: string | null; last_error: string | null; last_error_at: string | null; created: string; cooling: Record<string, number> }
 export interface KeysResponse { keys: AdminKey[]; models: string; fast_models: string; default_models: string; default_fast_models: string }
+/** Lượt tra cứu: tổng hợp theo người dùng / theo cây, và danh sách để xem, xóa. */
+export interface LookupSummary {
+  total: number;
+  by_user: { user_id: number; username: string; n: number; last: string; plants: { plant: string; n: number }[] }[];
+  by_plant: { plant: string; n: number; last: string; users: { user_id: number; username: string; n: number }[] }[];
+}
+export interface LookupRow { id: number; user_id: number; username: string | null; plant: string; disease: string; healthy: number; confidence: number | null; source: string | null; image_url: string | null; created: string }
+export interface LookupList { total: number; rows: LookupRow[] }
 export interface Sample {
   id: number; class_name: string; confidence: number; status: "pending" | "approved"; created: string; diagnosis_id: number | null; username: string | null;
   plant: string | null; disease: string | null; source: string | null; image_url: string | null;

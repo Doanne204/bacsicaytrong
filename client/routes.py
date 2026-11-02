@@ -7,7 +7,7 @@ from flask import Blueprint, abort, current_app, jsonify, request, send_from_dir
 from werkzeug.security import generate_password_hash, check_password_hash
 import knowledge, ai_service, care, google_login, pests, push, shopping, weather
 from model_service import lesion_overlay, pest_entry, severity, severity_level
-from core import (LOCKED, TOO_MANY, IntegrityError, check_code, check_login, client_ip, db, deliver_code, deliver_reminders, drop_samples, err,
+from core import (LOCKED, TOO_MANY, IntegrityError, check_code, check_login, client_ip, db, deliver_code, deliver_reminders, drop_diagnosis, drop_samples, err,
                   image_url, is_admin, issue_code, login_required, me_row, norm_phone, notify, post_out, post_rows, rate_limit, remove_upload,
                   save_image, spa_page, user_plants, utcnow)
 
@@ -761,20 +761,10 @@ def delete_diagnosis(did):
     d = get_diag(did)
     if not d:
         return err("Không tìm thấy kết quả chẩn đoán", 404)
-    for t in ("chats", "ratings", "reports"):
-        db().execute(f"DELETE FROM {t} WHERE diagnosis_id=? AND user_id=?", (did, session["uid"]))
-    db().execute("UPDATE posts SET diagnosis_id=NULL WHERE diagnosis_id=?", (did,))  # bài đã chia sẻ thì bỏ thẻ kết quả
-    db().execute("DELETE FROM diagnoses WHERE id=?", (did,))
+    files = drop_diagnosis(d)
     db().commit()
-    remove_upload(d["image"])  # ảnh đã lưu vào dataset_ai (nếu có) vẫn giữ để huấn luyện
-    if d["image"]:
-        remove_upload(d["image"][:-4] + "-cam.jpg")
-        remove_upload(d["image"][:-4] + "-lesion.jpg")
-        det = json.loads(d["details"]) if d["details"] else {}
-        for c in list(det.get("cams", {}).values()) + det.get("photos", []):  # bản đồ Grad-CAM của kết quả cũ, ảnh thêm và ảnh vết bệnh của chúng
-            for k in ("url", "lesion_url"):
-                if c.get(k) and c[k] != image_url(d["image"]):
-                    remove_upload(c[k].removeprefix("/uploads/"))
+    for f in files:
+        remove_upload(f)
     return jsonify(ok=True)
 
 # ---------- Vết bệnh: phần lá không còn xanh, tìm theo màu (không dùng mô hình) ----------
@@ -1129,11 +1119,27 @@ def parse_reminder(j):
 def insert_reminder(tid, rm):
     db().execute("INSERT INTO reminders(treatment_id,user_id,content,due,repeat_days) VALUES(?,?,?,?,?)", (tid, session["uid"]) + rm)
 
+def reminder_status(r, now):
+    """Trạng thái một việc: done (đã làm; việc lặp lại thì đã làm lần này, chưa tới hẹn lần sau), todo (chưa làm), overdue (chưa làm, đến hạn),
+    skipped (chưa làm mà nhật ký đã khép; mở lại nhật ký thì việc này quay về chưa làm)."""
+    if r["done"]:
+        return "done" if r["done_at"] else "skipped"
+    if r["prev_due"] and r["due"] > now:
+        return "done"
+    return "overdue" if r["due"] <= now else "todo"
+
+def due_day_reached(due, now=None):
+    """Đã tới ngày hạn của việc chưa (theo giờ Việt Nam): trong ngày hạn thì làm giờ nào cũng được, trước ngày đó chưa được đánh dấu đã làm."""
+    vn, now = timedelta(hours=7), now or datetime.now(timezone.utc).replace(tzinfo=None)
+    return (datetime.strptime(due, "%Y-%m-%d %H:%M:%S") + vn).date() <= (now + vn).date()
+
 def treatment_out(t):
     q = lambda sql, *a: db().execute(sql, (t["id"],) + a).fetchone()[0]
+    now = utcnow()
+    steps = [reminder_status(r, now) for r in db().execute("SELECT done, done_at, prev_due, due FROM reminders WHERE treatment_id=?", (t["id"],)).fetchall()]
     nxt = db().execute("SELECT content, due FROM reminders WHERE treatment_id=? AND done=0 ORDER BY due LIMIT 1", (t["id"],)).fetchone()
     d = db().execute("SELECT id, image, confidence, healthy, plant_id, source FROM diagnoses WHERE id=?", (t["diagnosis_id"],)).fetchone() if t["diagnosis_id"] else None
-    return dict(t, logs=q("SELECT COUNT(*) FROM treatment_logs WHERE treatment_id=?"),
+    return dict(t, logs=q("SELECT COUNT(*) FROM treatment_logs WHERE treatment_id=?"), steps=dict(done=steps.count("done"), total=len(steps)),
                 pending=q("SELECT COUNT(*) FROM reminders WHERE treatment_id=? AND done=0"),
                 overdue=q("SELECT COUNT(*) FROM reminders WHERE treatment_id=? AND done=0 AND due<=?", utcnow()),
                 next=dict(nxt) if nxt else None, diagnosis=dict(d, image_url=image_url(d["image"])) if d else None,
@@ -1197,8 +1203,9 @@ def treatment_detail(tid):
     if not t:
         return err("Không tìm thấy nhật ký", 404)
     out = treatment_out(t)
-    out["reminders"] =[dict(r) for r in db().execute("SELECT id, content, due, repeat_days, done, created FROM reminders WHERE treatment_id=? "
-                                                      "ORDER BY done, due", (tid,)).fetchall()]
+    now = utcnow()
+    out["reminders"] = [dict(r, status=reminder_status(r, now)) for r in db().execute(
+        "SELECT id, content, due, repeat_days, done, done_at, times_done, prev_due, created FROM reminders WHERE treatment_id=? ORDER BY done, due", (tid,)).fetchall()]
     # PostgreSQL: created là TIMESTAMP còn done_at là TEXT, COALESCE không tự đổi kiểu -> ép created sang chuỗi 'YYYY-MM-DD HH:MM:SS'
     out["entries"] = [dict(r, image_url=image_url(r["image"])) for r in db().execute(
         "SELECT id, kind, content, image, done_at, created FROM treatment_logs WHERE treatment_id=? ORDER BY COALESCE(done_at, CAST(created AS TEXT)) DESC, id DESC", (tid,)).fetchall()]
@@ -1218,8 +1225,10 @@ def update_treatment(tid):
         db().execute("UPDATE treatments SET name=? WHERE id=?", ((j.get("name") or "").strip()[:80] or None, tid))
     if j.get("status") in ("active", "done"):
         db().execute("UPDATE treatments SET status=?, closed=? WHERE id=?", (j["status"], utcnow() if j["status"] == "done" else None, tid))
-        if j["status"] == "done":  # khép nhật ký: bỏ các nhắc việc còn chờ
-            db().execute("UPDATE reminders SET done=1 WHERE treatment_id=? AND done=0", (tid,))
+        if j["status"] == "done":  # khép nhật ký: việc còn chờ thôi nhắc, ghi nhận là chưa làm (done_at trống)
+            db().execute("UPDATE reminders SET done=1, done_at=NULL, prev_due=NULL WHERE treatment_id=? AND done=0", (tid,))
+        elif t["status"] == "done":  # mở lại: các việc chưa làm lúc khép quay về danh sách cần làm
+            db().execute("UPDATE reminders SET done=0 WHERE treatment_id=? AND done=1 AND done_at IS NULL", (tid,))
     db().commit()
     return jsonify(ok=True)
 
@@ -1298,7 +1307,8 @@ def create_reminder(tid):
 @bp.put("/api/reminders/<int:rid>")
 @login_required
 def update_reminder(rid):
-    """done=1: đánh dấu đã làm (tự ghi vào nhật ký; nhắc lặp lại thì hẹn lần sau). done=0: mở lại."""
+    """done=1: đánh dấu đã làm (tự ghi vào nhật ký; nhắc lặp lại thì hẹn lần sau). done=0: về chưa làm, gỡ ghi chép tự động của lần đó;
+    việc lặp lại quay về hạn trước đó (chỉ hoàn tác được lần gần nhất)."""
     r = db().execute("SELECT * FROM reminders WHERE id=? AND user_id=?", (rid, session["uid"])).fetchone()
     if not r:
         return err("Không tìm thấy nhắc việc", 404)
@@ -1307,19 +1317,30 @@ def update_reminder(rid):
         when = parse_when(j["due"])
         if not when:
             return err("Thời điểm nhắc không hợp lệ", field="due")
-        db().execute("UPDATE reminders SET due=?, notified=0 WHERE id=?", (when, rid))
+        db().execute("UPDATE reminders SET due=?, notified=0, prev_due=NULL WHERE id=?", (when, rid))
+    log_text, now = f"Đã làm: {r['content']}", utcnow()
     if j.get("done"):
+        if r["done"] and r["done_at"]:  # đã đánh dấu rồi (bấm hai lần): không ghi trùng
+            return jsonify(ok=True)
+        if not due_day_reached(r["due"]):
+            when = datetime.strptime(r["due"], "%Y-%m-%d %H:%M:%S") + timedelta(hours=7)
+            return err(f"Chưa đến hạn: đến ngày {when:%d/%m/%Y} mới đánh dấu đã làm được")
         db().execute("INSERT INTO treatment_logs(treatment_id,user_id,kind,content) VALUES(?,?,?,?)",
-                     (r["treatment_id"], session["uid"], "kiemtra" if "kiểm tra" in r["content"].lower() else "phun" if "phun" in r["content"].lower() else "khac",
-                      f"Đã làm: {r['content']}"))
+                     (r["treatment_id"], session["uid"], "kiemtra" if "kiểm tra" in r["content"].lower() else "phun" if "phun" in r["content"].lower() else "khac", log_text))
         if r["repeat_days"]:
             base = max(datetime.strptime(r["due"], "%Y-%m-%d %H:%M:%S"), datetime.now(timezone.utc).replace(tzinfo=None))
             nxt = (base + timedelta(days=r["repeat_days"])).strftime("%Y-%m-%d %H:%M:%S")
-            db().execute("UPDATE reminders SET due=?, notified=0 WHERE id=?", (nxt, rid))
+            db().execute("UPDATE reminders SET done=0, due=?, prev_due=?, done_at=?, times_done=times_done+1, notified=0 WHERE id=?", (nxt, r["due"], now, rid))
         else:
-            db().execute("UPDATE reminders SET done=1 WHERE id=?", (rid,))
+            db().execute("UPDATE reminders SET done=1, done_at=?, times_done=times_done+1 WHERE id=?", (now, rid))
     elif "done" in j:
-        db().execute("UPDATE reminders SET done=0, notified=0 WHERE id=?", (rid,))
+        if r["done_at"] and (r["done"] or r["prev_due"]):  # đang là đã làm: gỡ ghi chép tự động của lần đó
+            log = db().execute("SELECT id FROM treatment_logs WHERE treatment_id=? AND user_id=? AND content=? ORDER BY id DESC LIMIT 1",
+                               (r["treatment_id"], session["uid"], log_text)).fetchone()
+            if log:
+                db().execute("DELETE FROM treatment_logs WHERE id=?", (log["id"],))
+            db().execute("UPDATE reminders SET times_done=? WHERE id=?", (max(r["times_done"] - 1, 0), rid))
+        db().execute("UPDATE reminders SET done=0, done_at=NULL, notified=0, due=COALESCE(prev_due, due), prev_due=NULL WHERE id=?", (rid,))
     db().commit()
     return jsonify(ok=True)
 

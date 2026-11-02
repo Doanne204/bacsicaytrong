@@ -2,16 +2,16 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlarmClock, AlertTriangle, ArrowLeft, Bug, Camera, CheckCircle2, ImagePlus, Leaf, Plus, RotateCcw, Trash2, Undo2, X } from "lucide-react";
+import { AlarmClock, AlertTriangle, ArrowLeft, Bug, Camera, Check, CheckCircle2, ImagePlus, Leaf, Lock, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { api, del, send, upload, LOG_KINDS, type LogKind, type Reminder, type TreatmentDetail } from "@/shared/lib/api";
 import { cn, fmtDate, fmtTime, pickFile, shrink, toDate } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Badge } from "@/shared/ui/badge";
 import { Input, Textarea } from "@/shared/ui/input";
-import { Notice } from "@/shared/ui/misc";
+import { Notice, Progress } from "@/shared/ui/misc";
 import { ConfirmDialog } from "@/shared/components/common";
 import { PageSkeleton } from "../layout/PageSkeleton";
-import { KIND_ICON, dueLabel, localAt, toUtc } from "../components/journal";
+import { KIND_ICON, dueDayReached, dueLabel, localAt, toUtc } from "../components/journal";
 
 export default function JournalDetail() {
   const { id } = useParams();
@@ -113,6 +113,7 @@ function LogForm({ tid, onSaved }: { tid: number; onSaved: () => void }) {
 function Reminders({ t, onChange }: { t: TreatmentDetail; onChange: () => void }) {
   const active = t.status === "active";
   const [adding, setAdding] = useState(false), [content, setContent] = useState(""), [due, setDue] = useState(localAt(3)), [repeat, setRepeat] = useState(0), [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState<"all" | "todo" | "done">("all");
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!content.trim()) return toast.error("Hãy nhập nội dung nhắc");
@@ -120,29 +121,33 @@ function Reminders({ t, onChange }: { t: TreatmentDetail; onChange: () => void }
     try { await send(`/api/treatments/${t.id}/reminders`, { content: content.trim(), due: toUtc(due), repeat_days: repeat }); setContent(""); setAdding(false); toast.success("Đã đặt nhắc việc"); onChange(); }
     catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
   };
+  const isDone = (r: Reminder) => r.status === "done";
   const toggle = async (r: Reminder) => {
     try {
-      await send(`/api/reminders/${r.id}`, { done: r.done ? 0 : 1 }, "PUT");
-      if (!r.done) toast.success(r.repeat_days ? `Đã ghi vào nhật ký, hẹn lại sau ${r.repeat_days} ngày` : "Đã ghi vào nhật ký");
+      await send(`/api/reminders/${r.id}`, { done: isDone(r) ? 0 : 1 }, "PUT");
+      toast.success(isDone(r) ? "Đã chuyển về chưa làm" : r.repeat_days ? `Đã ghi vào nhật ký, hẹn lại sau ${r.repeat_days} ngày` : "Đã ghi vào nhật ký");
       onChange();
     } catch (e) { toast.error((e as Error).message); }
   };
-  const pending = t.reminders.filter((r) => !r.done), done = t.reminders.filter((r) => r.done);
-  const now = Date.now();
+  const done = t.reminders.filter(isDone), todo = t.reminders.filter((r) => !isDone(r));
+  const shown = filter === "todo" ? todo : filter === "done" ? done : [...todo, ...done];
+  const empty = { all: active ? "Chưa có nhắc việc nào." : "Nhật ký đã khép.", todo: "Không còn việc nào chưa làm.", done: "Chưa làm xong việc nào." }[filter];
   return (
     <div className="space-y-3">
-      {!pending.length && !adding && <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">{active ? "Chưa có nhắc việc nào." : "Nhật ký đã khép."}</p>}
+      {!!t.reminders.length && (
+        <div className="rounded-2xl border bg-card p-3">
+          <div className="flex items-center justify-between gap-3 text-sm"><b>Đã làm {done.length}/{t.reminders.length} việc</b><span className="tabular-nums text-muted-foreground">{Math.round((done.length / t.reminders.length) * 100)}%</span></div>
+          <Progress value={(done.length / t.reminders.length) * 100} className="mt-2" aria-label="Tiến độ các việc" />
+          <div className="mt-3 flex gap-1.5">
+            {([["all", `Tất cả (${t.reminders.length})`], ["todo", `Chưa làm (${todo.length})`], ["done", `Đã làm (${done.length})`]] as const).map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setFilter(k)} aria-pressed={filter === k} className={cn("h-8 rounded-full border px-3 text-xs font-semibold transition", filter === k ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:border-primary")}>{l}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {!shown.length && !adding && <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">{empty}</p>}
       <ul className="space-y-2">
-        {pending.map((r) => {
-          const over = toDate(r.due).getTime() <= now;
-          return (
-            <li key={r.id} className={cn("flex items-start gap-3 rounded-2xl border bg-card p-3", over && "border-destructive/50 bg-destructive/5")}>
-              <button type="button" onClick={() => toggle(r)} disabled={!active} className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-primary text-primary transition hover:bg-primary hover:text-primary-foreground disabled:opacity-40" aria-label="Đánh dấu đã làm"><CheckCircle2 className="h-4 w-4" /></button>
-              <span className="min-w-0 flex-1 text-sm"><b className="block">{r.content}</b><span className={cn("text-xs", over ? "font-semibold text-destructive" : "text-muted-foreground")}>{dueLabel(r.due)}{r.repeat_days ? ` · lặp ${r.repeat_days} ngày` : ""}</span></span>
-              {active && <button type="button" className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive" aria-label="Xóa nhắc việc" onClick={async () => { await del(`/api/reminders/${r.id}`); onChange(); }}><X className="h-4 w-4" /></button>}
-            </li>
-          );
-        })}
+        {shown.map((r) => <ReminderRow key={r.id} r={r} active={active} onToggle={() => toggle(r)} onDelete={async () => { await del(`/api/reminders/${r.id}`); onChange(); }} />)}
       </ul>
       {active && (adding ? (
         <form onSubmit={add} className="space-y-3 rounded-2xl border bg-card p-3">
@@ -158,18 +163,30 @@ function Reminders({ t, onChange }: { t: TreatmentDetail; onChange: () => void }
           <div className="flex gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => setAdding(false)}>Hủy</Button><Button type="submit" size="sm" className="ml-auto" loading={busy}>Đặt nhắc</Button></div>
         </form>
       ) : <Button variant="outline" className="w-full" onClick={() => setAdding(true)}><Plus />Thêm nhắc việc</Button>)}
-      {!!done.length && (
-        <details className="text-sm">
-          <summary className="cursor-pointer font-semibold text-muted-foreground">Đã làm ({done.length})</summary>
-          <ul className="mt-2 space-y-1.5">
-            {done.map((r) => (
-              <li key={r.id} className="flex items-center gap-2 rounded-xl bg-muted/60 px-3 py-2 text-muted-foreground"><CheckCircle2 className="h-4 w-4 shrink-0 text-primary" /><span className="flex-1 line-through">{r.content}</span>
-                {active && <button type="button" className="rounded-md p-1 hover:bg-accent" aria-label="Mở lại nhắc việc" onClick={() => toggle(r)}><Undo2 className="h-4 w-4" /></button>}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
     </div>
+  );
+}
+
+/** Một việc: bấm vòng tròn để chuyển đã làm / chưa làm; nhãn trạng thái và thời điểm làm luôn hiện để dễ theo dõi. */
+function ReminderRow({ r, active, onToggle, onDelete }: { r: Reminder; active: boolean; onToggle: () => void; onDelete: () => void }) {
+  const done = r.status === "done", over = r.status === "overdue", when = r.done_at ? toDate(r.done_at) : null;
+  const locked = r.status === "todo" && !dueDayReached(r.due);
+  const badge = done ? <Badge variant="success">Đã làm</Badge> : over ? <Badge variant="destructive">Quá hạn</Badge> : <Badge variant="muted">{locked ? "Chưa đến hạn" : "Chưa làm"}</Badge>;
+  const note = done
+    ? [when && `Làm lúc ${fmtTime(when)}, ${fmtDate(when)}`, r.repeat_days ? `hẹn lại: ${dueLabel(r.due)}` : null, (r.times_done || 0) > 1 ? `${r.times_done} lần` : null].filter(Boolean).join(" · ")
+    : r.status === "skipped" ? "Chưa làm khi khép nhật ký" : `${dueLabel(r.due)}${r.repeat_days ? ` · lặp ${r.repeat_days} ngày` : ""}${r.times_done ? ` · đã làm ${r.times_done} lần` : ""}`;
+  return (
+    <li className={cn("flex items-start gap-3 rounded-2xl border bg-card p-3", over && "border-destructive/50 bg-destructive/5", done && "bg-secondary/40")}>
+      {locked ? <span title="Đến ngày hạn mới đánh dấu đã làm được" aria-label={`Chưa đến hạn: ${r.content}`} role="img" className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-dashed text-muted-foreground"><Lock className="h-3.5 w-3.5" /></span> : (
+        <button type="button" onClick={onToggle} disabled={!active} aria-pressed={done} aria-label={done ? `Chuyển về chưa làm: ${r.content}` : `Đánh dấu đã làm: ${r.content}`}
+          className={cn("mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-primary transition disabled:opacity-40", done ? "bg-primary text-primary-foreground hover:bg-primary/80" : "text-primary hover:bg-primary hover:text-primary-foreground")}><Check className="h-4 w-4" /></button>
+      )}
+      <span className="min-w-0 flex-1 text-sm">
+        <b className={cn("block", done && !r.repeat_days && "font-semibold text-muted-foreground line-through")}>{r.content}</b>
+        <span className={cn("text-xs", over ? "font-semibold text-destructive" : "text-muted-foreground")}>{note}</span>
+      </span>
+      <span className="shrink-0">{badge}</span>
+      {active && <button type="button" className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive" aria-label={`Xóa nhắc việc: ${r.content}`} onClick={onDelete}><X className="h-4 w-4" /></button>}
+    </li>
   );
 }

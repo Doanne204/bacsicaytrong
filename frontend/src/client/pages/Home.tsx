@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlarmClock, BookOpen, Camera, CheckCircle2, ChevronRight, Clock, CloudSun, ImagePlus, Info, Leaf, MessageCircle, NotebookPen, PenSquare, ShieldAlert, Star } from "lucide-react";
+import { AlarmClock, BookOpen, Camera, CheckCircle2, Lock, ChevronRight, Clock, CloudSun, ImagePlus, Info, Leaf, MessageCircle, NotebookPen, PenSquare, ShieldAlert, Star } from "lucide-react";
 import { toast } from "sonner";
 import { api, send, type DueReminder, type HistoryItem, type WeatherReport } from "@/shared/lib/api";
 import { ago, cn, dayKey, ddmm, liveCamera, pct, pickFile, toDate } from "@/shared/lib/utils";
@@ -12,7 +12,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { PostCard, fetchPosts } from "../components/posts";
 import { LEVEL } from "../components/weather";
 import { WxIcon } from "../components/sky";
-import { dueLabel } from "../components/journal";
+import { dueDayReached, dueLabel } from "../components/journal";
 import { pending } from "./Scan";
 
 const WEEKDAYS = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
@@ -147,7 +147,8 @@ function TodayTasks({ t }: { t: Today }) {
       <ul className="divide-y rounded-2xl border bg-card">
         {list.map((r) => (
           <li key={r.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-            <button type="button" onClick={() => done(r)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border-2 border-primary text-primary transition hover:bg-primary hover:text-primary-foreground" aria-label={`Đánh dấu đã làm: ${r.content}`}><CheckCircle2 className="h-4 w-4" /></button>
+            {dueDayReached(r.due) ? <button type="button" onClick={() => done(r)} className="grid h-8 w-8 shrink-0 place-items-center rounded-full border-2 border-primary text-primary transition hover:bg-primary hover:text-primary-foreground" aria-label={`Đánh dấu đã làm: ${r.content}`}><CheckCircle2 className="h-4 w-4" /></button>
+              : <span title="Đến ngày hạn mới đánh dấu đã làm được" aria-label="Chưa đến hạn" role="img" className="grid h-8 w-8 shrink-0 place-items-center rounded-full border-2 border-dashed text-muted-foreground"><Lock className="h-4 w-4" /></span>}
             <Link to={`/journal/${r.treatment_id}`} className="min-w-0 flex-1"><b className="block">{r.content}</b>
               <span className="text-xs text-muted-foreground">{r.name || `${r.plant}: ${r.disease}`}<span className={cn("sm:hidden", r.overdue && "font-semibold text-destructive")}>, {dueLabel(r.due)}</span></span></Link>
             <span className={cn("hidden shrink-0 text-xs font-semibold sm:block", r.overdue ? "text-destructive" : "text-muted-foreground")}>{dueLabel(r.due)}</span>

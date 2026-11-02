@@ -14,6 +14,7 @@ const Comments = lazy(() => import("./pages/Comments"));
 const Users = lazy(() => import("./pages/Users"));
 const Ratings = lazy(() => import("./pages/Ratings"));
 const Data = lazy(() => import("./pages/Data"));
+const Lookups = lazy(() => import("./pages/Lookups"));
 const Keys = lazy(() => import("./pages/Keys"));
 const Stats = lazy(() => import("./pages/Stats"));
 const Models = lazy(() => import("./pages/Models"));
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/posts" element={<Posts onChange={() => stats.refetch()} />} />
           <Route path="/comments" element={<Comments onChange={() => stats.refetch()} />} />
           <Route path="/users" element={<Users />} />
+          <Route path="/lookups" element={<Lookups onChange={() => stats.refetch()} />} />
           <Route path="/ratings" element={<Ratings />} />
           <Route path="/data" element={<Data stats={stats.data} onChange={() => stats.refetch()} />} />
           <Route path="/keys" element={<Keys />} />

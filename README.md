@@ -37,7 +37,7 @@
   (`/api/diagnoses/<id>/lesion`). Trang kết quả đã bỏ Grad-CAM vì vùng mô hình chú ý thường không trùng vết bệnh (trên 56 ảnh lá bệnh
   test, điểm nóng nhất nằm trên vết bệnh 27% với lớp 7x7, 41% với lớp 14x14), người dùng dễ hiểu nhầm là bản đồ bệnh. Grad-CAM chỉ còn
   trong hình báo cáo: `python gradcam_examples.py` -> `results/gradcam_examples.png` (ca đúng) và `gradcam_errors.png` (ca sai: lớp đoán
-  và lớp đúng), hiện trong trang quản trị "Đánh giá mô hình".
+  và lớp đúng), không hiện trong app.
 - **Mức độ bệnh**: ước lượng mức độ
   bệnh (% diện tích lá đổi màu, đúng phần tô hồng ở tab Vết bệnh) xếp nhẹ / trung bình / nặng kèm lời khuyên. Phiếu chẩn đoán in ra giấy hoặc
   lưu PDF, có mã QR mở lại kết quả. Đọc kết quả thành tiếng, hỏi chatbot bằng giọng nói (Web Speech API, Chrome).
@@ -56,7 +56,9 @@
   phun lại sau 5 ngày, gỉ sắt phun lại sau 10 ngày, vi khuẩn cắt bỏ phần bệnh và phun gốc đồng, virus nhổ cây và diệt côn trùng môi giới
   (không phun thuốc trừ bệnh), nhện phun lần 2 diệt lứa trứng mới nở, từng nhóm sâu hại INSECT204, bệnh do môi trường / thiếu dinh dưỡng
   (không phun); tên thuốc trong lời nhắc lấy từ hướng xử lý của chính bệnh đó. Ghi việc đã làm (phun thuốc, tỉa, tưới bón, kiểm tra, kèm ảnh) theo
-  dòng thời gian; nhắc việc có hạn, lặp lại theo chu kỳ, đánh dấu "đã làm" thì tự ghi vào nhật ký. Đến hạn -> thông báo trong ứng dụng
+  dòng thời gian; nhắc việc có hạn, lặp lại theo chu kỳ, đánh dấu "đã làm" thì tự ghi vào nhật ký, bỏ đánh dấu thì về "chưa làm" và gỡ ghi chép đó
+  (việc lặp lại quay về hạn trước, chỉ hoàn tác được lần gần nhất). Trước ngày hạn thì chưa đánh dấu đã làm được (nút bị khóa, máy chủ cũng từ chối; trong ngày hạn thì giờ nào cũng được). Mỗi việc luôn hiện trạng thái Chưa làm / Chưa đến hạn / Quá hạn / Đã làm và thời điểm làm; có thanh
+  tiến độ "Đã làm x/y việc" (cả trên thẻ nhật ký), lọc Tất cả / Chưa làm / Đã làm. Khép nhật ký thì việc còn lại ghi là chưa làm, mở lại thì quay về danh sách. Đến hạn -> thông báo trong ứng dụng
   (kiểm tra mỗi khi mở app) và email nếu chạy `flask --app app remind` theo lịch (xem "Chạy thật"). Trang chủ có mục "Việc cần làm".
 - **Thời tiết** (`/weather`): khung kiểu ứng dụng thời tiết với bầu trời động theo thời tiết hiện tại (nắng, mây trôi, mưa, mưa to,
   dông có chớp, sương mù, tuyết, trời đêm có sao, trăng; tắt hiệu ứng khi hệ điều hành bật "giảm chuyển động"): thẻ hiện tại (nhiệt độ,
@@ -101,6 +103,8 @@
   Quản trị viên vẫn thấy lối vào "Trang quản trị" trong ứng dụng (thanh bên trái và Hồ sơ). Hai trang dùng chung phiên đăng nhập.
   - Tổng quan: số liệu, biểu đồ lượt tra cứu 14 ngày, bệnh gặp nhiều nhất, gửi thông báo cho mọi người.
   - Bài viết (duyệt/từ chối kèm lý do, tìm kiếm), bình luận (lọc bình luận AI chưa duyệt, xóa), đánh giá (lọc theo sao, xóa).
+  - Lượt tra cứu: theo người dùng (đã tra cứu những cây gì) và theo cây (những ai đã tra cứu), số lượt từng cặp; bấm để lọc danh sách, tìm
+    theo người dùng / cây / bệnh; xóa từng lượt hoặc nhiều lượt đã chọn (cùng chat, đánh giá kèm theo và ảnh tải lên; ảnh trong `dataset_ai/` vẫn giữ).
   - Người dùng: tìm kiếm, khóa/mở khóa, cấp/bỏ quyền quản trị, đặt lại mật khẩu (mật khẩu tạm hiện một lần), xóa tài khoản kèm dữ liệu.
   - Thống kê: tra cứu 12 tháng theo nguồn, bảng bệnh theo tháng, độ chính xác suy từ đánh giá sao (4-5 sao = đúng), lượt AI 30 ngày.
   - Đánh giá mô hình: ma trận nhầm lẫn, precision/recall/F1 từng lớp đọc từ `results/` (train.py, yolo/export_pest.py); tab "So sánh kiến trúc"
